@@ -8,6 +8,7 @@ enum OnboardProfileTests {
         var sets: [[UInt8]] = []
         var failNextSet = false
         var failAllSets = false
+        var flagged: Set<UInt8> = [] // Reported with byte 2 = 01 in every layer, like a Synapse-configured mouse.
         let ids: [UInt8] = [1,2,3,52,53,11,12,64,67,70,73,65,68,71,74,66,69,72,75,9,10]
         init() {
             for id in ids {
@@ -27,6 +28,7 @@ enum OnboardProfileTests {
             case (2, 0x8c):
                 guard var value = bindings[args[1]] else { throw Failure(description: "Unknown control") }
                 value[0] = args[0]
+                if flagged.contains(args[1]) { value[2] = 1 }
                 args = value
             case (2, 0x0c):
                 sets.append(args)
@@ -103,6 +105,16 @@ enum OnboardProfileTests {
         try OnboardProfileStore.restore(session: session, identity: mouse.identity, at: url)
         try check(mouse.bindings == original, "Restore recovers every original descriptor")
         try check(!FileManager.default.fileExists(atPath: url.path), "Verified restoration removes the hardware-mode gate")
+        // Synapse-configured mouse: middle button and side button 1 report byte 2 = 01.
+        mouse.flagged = [3, 64]
+        mouse.sets = []
+        try OnboardProfileStore.save(escape, session: session, identity: mouse.identity, at: url)
+        try check(mouse.bindings[64] == [1,64,0,2,2,0,41,0,0,0], "Save succeeds on a flagged control")
+        try check(OnboardProfileStore.load(from: url).original.allSatisfy { $0[2] == 0 }, "Backup stores the normal layer, not the reply status")
+        try OnboardProfileStore.restore(session: session, identity: mouse.identity, at: url)
+        try check(mouse.bindings == original, "Restore succeeds on flagged controls")
+        try check(!mouse.sets.isEmpty && mouse.sets.allSatisfy { $0[2] == 0 }, "Every write targets the normal layer")
+        mouse.flagged = []
         mouse.failAllSets = true
         try rejects { try OnboardProfileStore.save(escape, session: session, identity: mouse.identity, at: url) }
         try check(OnboardProfileStore.load(from: url).pending, "Failed rollback keeps a pending recovery journal")

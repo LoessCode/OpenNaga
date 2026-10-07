@@ -9,12 +9,18 @@ struct RazerOnboardBinding: Equatable, Codable {
     var buttonID: UInt8 { bytes[1] }
 
     init(bytes: [UInt8], profile: UInt8, buttonID: UInt8) throws {
-        guard bytes.count == 10, bytes[0] == profile, bytes[1] == buttonID, bytes[2] == 0 else {
+        guard bytes.count == 10, bytes[0] == profile, bytes[1] == buttonID else {
             throw RazerHardwareError.malformed("Invalid hardware assignment or one that refers to another button.")
         }
         // Preserve every function byte, including unknown types. Factory keyboard
         // bindings use length 1 but still carry a usage in byte 6 on this receiver.
-        self.bytes = bytes
+        // Byte 2 selects the layer in requests (0 normal, 1 Hypershift). Replies do
+        // not echo it: a Synapse-configured mouse reports 01 on some controls in
+        // both layers. Only the normal layer is read or written here, so store 0;
+        // keeping the reply value would send a restore to the Hypershift layer.
+        var normalized = bytes
+        normalized[2] = 0
+        self.bytes = normalized
     }
 }
 

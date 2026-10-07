@@ -167,7 +167,10 @@ enum HardwareProtocolTests {
         }
         let factory: [UInt8] = [1, 64, 0, 2, 1, 0, 30, 0, 0, 0]
         try check(RazerOnboardBinding(bytes: factory, profile: 1, buttonID: 64).bytes == factory, "Preserve factory descriptor including nonstandard length")
-        for field in [0, 1, 2] {
+        var flagged = factory
+        flagged[2] = 1
+        try check(RazerOnboardBinding(bytes: flagged, profile: 1, buttonID: 64).bytes == factory, "Reply byte 2 is a status, normalized to the normal layer")
+        for field in [0, 1] {
             var wrong = factory
             wrong[field] ^= 1
             try rejects("Onboard identity field") { _ = try RazerOnboardBinding(bytes: wrong, profile: 1, buttonID: 64) }
