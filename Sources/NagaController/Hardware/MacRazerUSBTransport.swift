@@ -97,12 +97,15 @@ final class MacRazerUSBTransport: RazerTransport {
             operation.result = result
         }
         let result: IOReturn
+        // The callback variants take the timeout in milliseconds despite the
+        // CFTimeInterval type; passing seconds times out after 1 ms.
+        let timeoutMilliseconds = timeout * 1000
         if reading {
             result = IOHIDDeviceGetReportWithCallback(device, kIOHIDReportTypeFeature, 0,
-                transfer.buffer, transfer.lengthPointer, timeout, callback, context)
+                transfer.buffer, transfer.lengthPointer, timeoutMilliseconds, callback, context)
         } else {
             result = IOHIDDeviceSetReportWithCallback(device, kIOHIDReportTypeFeature, 0,
-                transfer.buffer, 90, timeout, callback, context)
+                transfer.buffer, 90, timeoutMilliseconds, callback, context)
         }
         guard result == kIOReturnSuccess else {
             Unmanaged<Transfer>.fromOpaque(context).release()
