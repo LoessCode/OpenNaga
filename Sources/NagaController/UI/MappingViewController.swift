@@ -113,6 +113,7 @@ struct NagaWorkspace: View {
                             .foregroundStyle(model.section == section ? UIStyle.accent : .primary)
                             .background(model.section == section ? UIStyle.selection : .clear)
                             .clipShape(RoundedRectangle(cornerRadius: 7))
+                            .contentShape(RoundedRectangle(cornerRadius: 7)) // Whole row, not just the label.
                     }.buttonStyle(.plain)
                         .accessibilityAddTraits(model.section == section ? [.isSelected] : [])
                 }
