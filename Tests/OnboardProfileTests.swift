@@ -110,6 +110,41 @@ enum OnboardProfileTests {
         try rejects { try OnboardProfileStore.save(escape, session: session, identity: mouse.identity, at: url) }
         try OnboardProfileStore.restore(session: session, identity: mouse.identity, at: url)
         try check(mouse.bindings == original, "Manual recovery after interrupted writes")
+
+        // Import: every function the encoder writes decodes back to the same bytes.
+        for function: [UInt8] in [[1,1,1,0,0,0,0], [1,1,4,0,0,0,0], [1,1,10,0,0,0,0], [6,1,2,0,0,0,0], [14,3,104,0,20,0,0],
+                                  [10,2,0,0xe9,0,0,0], [2,2,10,6,0,0,0], [2,2,1,43,0,0,0], [2,2,0,41,0,0,0], [0,0,0,0,0,0,0]] {
+            let action = OnboardProfilePlan.action(from: function)
+            try check(action.map { try? OnboardProfilePlan.function($0) } == function, "Import round trip \(function)")
+        }
+        try check(OnboardProfilePlan.action(from: [2,2,0x14,6,0,0,0]) == nil, "Right-hand modifiers are not guessed")
+        try check(OnboardProfilePlan.action(from: [9,9,9,0,0,0,0]) == nil, "Unknown function types are not guessed")
+        // Factory layout: length-1 keyboard bindings on the grid, native clicks elsewhere.
+        let factory = OnboardProfilePlan.mapping(from: try RazerOnboardBindings.readFunctions(session: session, profile: 0))
+        try check(factory.mapping[1] == .keySequence(keys: [KeyStroke(key: "1", modifiers: [], keyCode: 18)], description: nil), "Factory side button 1 imports as the 1 key")
+        try check(factory.mapping[18] == nil && factory.mapping[19] == nil, "Controls on their own function stay unmapped")
+        // Synapse-configured mice report byte 2 = 01 on some controls.
+        mouse.bindings[64]![2] = 1
+        try check(try RazerOnboardBindings.readFunctions(session: session, profile: 0)[64] == [2,1,0,0x1e,0,0,0], "Import tolerates a nonzero byte 2")
+        mouse.bindings = original
+        // Assignments read from a Naga V2 HyperSpeed configured in Synapse (2026-10-07).
+        let synapse: [UInt8: [UInt8]] = [1: [1,1,1], 2: [1,1,2], 3: [1,1,3], 0x34: [1,1,10], 0x35: [1,1,9], 0x0b: [6,1,1], 0x0c: [6,1,2],
+                                         0x40: [2,2,4,0x1e], 0x41: [2,2,4,0x1f], 0x42: [2,2,4,0x20], 0x43: [2,2,4,0x21],
+                                         0x44: [2,2,4,0x16], 0x45: [2,2,4,0x12], 0x46: [2,2,0,0xe3], 0x47: [2,2,0,0xe2],
+                                         0x48: [2,2,4,0x10], 0x49: [2,2,10,0x2f], 0x4a: [2,2,10,0x30], 0x4b: [2,2,2,0x0a]]
+            .mapValues { $0 + Array(repeating: 0, count: 7 - $0.count) }
+        let imported = OnboardProfilePlan.mapping(from: synapse)
+        func stroke(_ index: Int) -> KeyStroke? {
+            guard case .keySequence(let keys, _) = imported.mapping[index], keys.count == 1 else { return nil }
+            return keys[0]
+        }
+        try check(stroke(1)?.keyCode == 18 && stroke(1)?.modifiers == ["alt"], "Option 1")
+        try check(stroke(10)?.keyCode == 33 && stroke(10)?.modifiers == ["shift", "cmd"], "Shift Command [")
+        let catalog = KeyboardKeyCatalog.current()
+        try check(stroke(10)?.key == catalog.first { $0.code == 33 }?.key && stroke(11)?.key == catalog.first { $0.code == 30 }?.key,
+                  "Imported keys are named like Record Key, so [ and ] read alike")
+        try check(imported.mapping[15] == .mouse(action: .scrollDown, description: nil) && imported.mapping[16] == .mouse(action: .scrollUp, description: nil), "Tilt bound to vertical scroll")
+        try check(imported.mapping.count == 12 && imported.issues.count == 2, "Lone modifiers on buttons 7 and 8 are reported, not imported")
         return count
     }
 }

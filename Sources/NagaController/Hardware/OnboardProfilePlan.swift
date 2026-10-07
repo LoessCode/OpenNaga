@@ -60,9 +60,61 @@ struct OnboardProfilePlan {
         }
     }
 
+    // Inverse of init for importing what the mouse stores. Controls left on
+    // their own function stay unmapped so software never intercepts them.
+    static func mapping(from functions: [UInt8: [UInt8]]) -> (mapping: [Int: ActionType], issues: [String]) {
+        let natural: [Int: ActionType] = [13: .mouse(action: .dpiUp, description: nil), 14: .mouse(action: .dpiDown, description: nil),
+                                          17: .mouse(action: .middleClick, description: nil),
+                                          18: .mouse(action: .leftClick, description: nil), 19: .mouse(action: .rightClick, description: nil)]
+        var mapping: [Int: ActionType] = [:]
+        var issues: [String] = []
+        for (index, id) in buttonIDs.sorted(by: { $0.key < $1.key }) {
+            guard let function = functions[id] else { continue }
+            if let action = action(from: function) {
+                if natural[index] != action { mapping[index] = action }
+            } else if function.count == 7, function[0] == 2, (0xe0...0xe7).contains(function[3]) {
+                issues.append("Button \(index): a modifier key on its own cannot be imported.")
+            } else {
+                issues.append("Button \(index): unsupported assignment \(function.map { String(format: "%02x", $0) }.joined(separator: " ")).")
+            }
+        }
+        return (mapping, issues)
+    }
+
+    static func action(from function: [UInt8]) -> ActionType? {
+        guard function.count == 7 else { return nil }
+        if function.allSatisfy({ $0 == 0 }) { return .disabled }
+        switch (function[0], function[1]) {
+        case (1, 1):
+            let buttons: [UInt8: MouseAction] = [1: .leftClick, 2: .rightClick, 3: .middleClick, 4: .button4,
+                                                 5: .button5, 9: .scrollUp, 10: .scrollDown]
+            return buttons[function[2]].map { .mouse(action: $0, description: nil) }
+        case (6, 1):
+            let stages: [UInt8: MouseAction] = [1: .dpiUp, 2: .dpiDown]
+            return stages[function[2]].map { .mouse(action: $0, description: nil) }
+        case (0x0e, 3):
+            let tilt: [UInt8: MouseAction] = [0x68: .scrollLeft, 0x69: .scrollRight]
+            return tilt[function[2]].map { .mouse(action: $0, description: nil) }
+        case (0x0a, 2):
+            return media.first { $0.value == function[3] }.map { .system(action: $0.key, description: nil) }
+        case (2, 1), (2, 2):
+            // Factory bindings use length 1 without a modifier byte but keep the usage in function[3].
+            let mask = function[1] == 2 ? function[2] : 0
+            guard mask & 0xf0 == 0, let code = keyboardCodes[function[3]] else { return nil }
+            let bits: [(UInt8, String)] = [(1, "ctrl"), (2, "shift"), (4, "alt"), (8, "cmd")]
+            // Same naming as Record Key, so imported keys read like recorded ones.
+            let stroke = KeyboardKeyCatalog.capturedStroke(code: code, characters: nil,
+                                                           modifiers: bits.compactMap { mask & $0.0 != 0 ? $0.1 : nil })
+            return .keySequence(keys: [stroke], description: nil)
+        default:
+            return nil
+        }
+    }
+
+    static let media: [SystemAction: UInt8] = [.volumeUp: 0xe9, .volumeDown: 0xea, .mute: 0xe2,
+                                              .playPause: 0xcd, .nextTrack: 0xb5, .previousTrack: 0xb6]
+
     private static func system(_ action: SystemAction) throws -> [UInt8] {
-        let media: [SystemAction: UInt8] = [.volumeUp: 0xe9, .volumeDown: 0xea, .mute: 0xe2,
-                                           .playPause: 0xcd, .nextTrack: 0xb5, .previousTrack: 0xb6]
         if let usage = media[action] { return [0x0a, 2, 0, usage, 0, 0, 0] }
         if let shortcut = action.shortcut?.resolve(in: MacSystemShortcut.preferences()) {
             guard !shortcut.flags.contains(.maskSecondaryFn) else { throw unsupported("the Mac Fn key needs the app.") }
@@ -103,4 +155,7 @@ struct OnboardProfilePlan {
         result[81] = 0x67
         return result
     }()
+
+    static let keyboardCodes: [UInt8: UInt16] = Dictionary(keyboardUsages.map { ($0.value, $0.key) },
+                                                           uniquingKeysWith: { min($0, $1) })
 }

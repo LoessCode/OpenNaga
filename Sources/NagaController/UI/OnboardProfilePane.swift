@@ -37,6 +37,9 @@ struct OnboardProfilePane: View {
                 Button("Restore Previous Assignments") { device.restoreOnboard() }
                     .disabled(!model.onboardActive || !device.isConnected || device.isBusy)
                 Spacer()
+                Button("Import from Mouse") { device.importOnboard() }
+                    .disabled(!device.isConnected || device.isBusy)
+                    .help("Create a new profile from the assignments stored in the mouse.")
                 Button("Refresh") { device.refresh() }.disabled(device.isBusy)
             }
             HStack {

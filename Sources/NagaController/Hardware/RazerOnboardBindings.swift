@@ -50,4 +50,21 @@ enum RazerOnboardBindings {
             return try RazerOnboardBinding(bytes: bytes, profile: profile, buttonID: id)
         }
     }
+
+    // Read-only view for importing into a software profile: button ID to its
+    // 7 function bytes. Accepts any byte 2: replies carry a status there, and a
+    // Synapse-configured mouse reports 01 on some controls.
+    static func readFunctions(session: RazerHardwareSession, profile: UInt8) throws -> [UInt8: [UInt8]] {
+        _ = try readCommand(profile: profile, buttonID: 1)
+        let ids = try decodeButtonIDs(session.execute(getButtonIDs))
+        var functions: [UInt8: [UInt8]] = [:]
+        for id in ids {
+            let bytes = try session.execute(readCommand(profile: profile, buttonID: id))
+            guard bytes.count == 10, bytes[0] == profile, bytes[1] == id else {
+                throw RazerHardwareError.malformed("Invalid hardware assignment or one that refers to another button.")
+            }
+            functions[id] = Array(bytes[3...])
+        }
+        return functions
+    }
 }
