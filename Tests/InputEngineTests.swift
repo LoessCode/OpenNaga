@@ -115,10 +115,37 @@ enum InputEngineTests {
         try check(events.last?.type == .leftMouseUp, "Mapping change releases hold")
         try check(mapper.dragEvent(for: move) == nil, "No stale drag after reset")
         mapper.updateMapping([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"])], description: nil)])
+        events.removeAll()
         mapper.handlePress(buttonIndex: 1)
+        try check(events.suffix(2).map(\.type) == [.flagsChanged, .keyDown], "Held shortcut presses its modifiers first")
+        try check(events.last?.flags == .maskCommand, "Held key carries the modifier flags")
         mapper.releaseAll()
-        try check(events.last?.type == .keyUp, "Cleanup releases held key")
+        try check(events.suffix(2).map(\.type) == [.keyUp, .flagsChanged], "Cleanup releases held key and its modifiers")
+        try check(events.last?.flags == [], "Released modifiers leave no flags behind")
         try check(events.allSatisfy { $0.getIntegerValueField(.eventSourceUserData) == ButtonMapper.syntheticMarker }, "Every emitted event is tagged")
+
+        // Regression for issue 6: modifiers must arrive as real key events,
+        // not only as flags on an orphan keyDown.
+        events.removeAll()
+        mapper.updateMapping([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd", "shift"])], description: nil)])
+        mapper.handle(buttonIndex: 1)
+        try check(events.map(\.type) == [.flagsChanged, .flagsChanged, .keyDown, .keyUp, .flagsChanged, .flagsChanged], "One-shot shortcut wraps the key in modifier edges")
+        try check(events[2].flags == [.maskCommand, .maskShift] && events[3].flags == [.maskCommand, .maskShift], "Key edges carry the requested modifiers")
+        try check(events.last?.flags == [], "Modifier edges end with a clean flag state")
+        events.removeAll()
+        mapper.updateMapping([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"]), KeyStroke(key: "v", modifiers: ["cmd"])], description: nil)])
+        mapper.handle(buttonIndex: 1)
+        try check(events.count == 8 && events[0].type == .flagsChanged && events[4].type == .flagsChanged, "Sequence steps press and release their own modifiers")
+        events.removeAll()
+        mapper.updateMapping([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"])], description: nil),
+                              2: .keySequence(keys: [KeyStroke(key: "v", modifiers: ["cmd"])], description: nil)])
+        mapper.handlePress(buttonIndex: 1)
+        mapper.handlePress(buttonIndex: 2)
+        try check(events.count == 3, "A second hold reuses the modifier already down")
+        mapper.handleRelease(buttonIndex: 1)
+        try check(events.count == 4 && events.last?.type == .keyUp, "Releasing one hold keeps the shared modifier down")
+        mapper.handleRelease(buttonIndex: 2)
+        try check(events.count == 6 && events.last?.type == .flagsChanged && events.last?.flags == [], "The last release lets the shared modifier go")
         for action in [MouseAction.button5, .middleClick, .rightClick, .scrollUp, .scrollDown, .scrollLeft, .scrollRight] {
             mapper.updateMapping([1: .mouse(action: action, description: nil)])
             let before = events.count
@@ -195,11 +222,11 @@ enum InputEngineTests {
             let stroke = entry.stroke(modifiers: ["cmd", "shift"])
             selectedKeyMapper.updateMapping([1: .keySequence(keys: [stroke], description: nil)])
             selectedKeyMapper.handlePress(buttonIndex: 1)
-            try check(selectedKeyEvents.count == 1 && selectedKeyEvents[0].type == .keyDown &&
-                      selectedKeyEvents[0].getIntegerValueField(.keyboardEventKeycode) == Int64(entry.code) &&
-                      selectedKeyEvents[0].flags.contains([.maskCommand, .maskShift]), "Picker key press: \(entry.key)")
+            try check(selectedKeyEvents.count == 3 && selectedKeyEvents[2].type == .keyDown &&
+                      selectedKeyEvents[2].getIntegerValueField(.keyboardEventKeycode) == Int64(entry.code) &&
+                      selectedKeyEvents[2].flags.contains([.maskCommand, .maskShift]), "Picker key press: \(entry.key)")
             selectedKeyMapper.handleRelease(buttonIndex: 1)
-            try check(selectedKeyEvents.count == 2 && selectedKeyEvents[1].type == .keyUp, "Picker key release: \(entry.key)")
+            try check(selectedKeyEvents.count == 6 && selectedKeyEvents[3].type == .keyUp, "Picker key release: \(entry.key)")
         }
         for (audio, expectedCode) in [(AudioAction.volumeUp, 0), (.volumeDown, 1), (.mute, 7)] {
             selectedKeyEvents.removeAll()
