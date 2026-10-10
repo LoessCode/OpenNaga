@@ -13,6 +13,10 @@ final class ButtonMapper {
     private let eventSink: ((CGEvent) -> Void)?
     private let workspaceActionSink: ((SystemAction) -> Void)?
     var systemShortcutPreferences: () -> [String: Any] = MacSystemShortcut.preferences
+    // Synthetic keys come from a real event source so posting them updates the
+    // system modifier state; apps that track that state ignore orphan flags.
+    private let keyboardSource = CGEventSource(stateID: .hidSystemState)
+    private var syntheticModifiers: CGEventFlags = []
 
     init(eventSink: ((CGEvent) -> Void)? = nil, workspaceActionSink: ((SystemAction) -> Void)? = nil) {
         self.eventSink = eventSink
@@ -34,6 +38,7 @@ final class ButtonMapper {
         generation += 1
         for button in Array(activeHolds.keys) { handleRelease(buttonIndex: button) }
         pressed.removeAll()
+        if activeHolds.isEmpty { syntheticModifiers = [] }
     }
 
     func handle(buttonIndex: Int) {
@@ -47,6 +52,7 @@ final class ButtonMapper {
         case .keySequence(let keys, _) where keys.count == 1:
             if let code = effectiveKeyCode(for: keys[0]) {
                 let flags = modifierFlags(from: keys[0].modifiers)
+                pressModifiers(flags)
                 activeHolds[buttonIndex] = .key(code, flags)
                 postKey(code, flags: flags, down: true)
             }
@@ -70,6 +76,7 @@ final class ButtonMapper {
             if !activeHolds.values.contains(where: { if case .key(let c, _) = $0 { return c == code }; return false }) {
                 postKey(code, flags: flags, down: false)
             }
+            releaseModifiers(flags)
         case .mouse(let button):
             if !activeHolds.values.contains(where: { if case .mouse(let b) = $0 { return b == button }; return false }) {
                 postMouse(button, down: false)
@@ -116,15 +123,13 @@ final class ButtonMapper {
             guard let stroke = shortcut.resolve(in: systemShortcutPreferences()) else {
                 return action.shortcutSetupMessage
             }
+            // Modifier edges keep the system modifier state in sync, which
+            // Command-Tab needs to close the app switcher and shortcuts in
+            // general need to register their modifiers.
+            pressModifiers(stroke.flags)
             postKey(stroke.keyCode, flags: stroke.flags, down: true)
             postKey(stroke.keyCode, flags: stroke.flags, down: false)
-            if action == .switchApplication {
-                // Command-Tab must release Command or the app switcher remains open.
-                let release = CGEvent(keyboardEventSource: nil, virtualKey: CGKeyCode(kVK_Command), keyDown: false)
-                release?.type = .flagsChanged
-                release?.flags = []
-                post(release)
-            }
+            releaseModifiers(stroke.flags)
         } else if let workspaceActionSink {
             workspaceActionSink(action)
         } else {
@@ -148,16 +153,63 @@ final class ButtonMapper {
     }
 
     private func postKey(_ code: CGKeyCode, flags: CGEventFlags, down: Bool) {
-        let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
+        let event = CGEvent(keyboardEventSource: keyboardSource, virtualKey: code, keyDown: down)
         event?.flags = flags
         post(event)
+    }
+
+    private func postModifier(_ flag: CGEventFlags, _ code: CGKeyCode, down: Bool) {
+        syntheticModifiers = down ? syntheticModifiers.union(flag) : syntheticModifiers.subtracting(flag)
+        let event = CGEvent(keyboardEventSource: keyboardSource, virtualKey: code, keyDown: down)
+        event?.type = .flagsChanged
+        event?.flags = syntheticModifiers
+        post(event)
+    }
+
+    /// Presses the modifiers a stroke needs. A modifier already down,
+    /// physically or synthetically, is left alone so a release here can never
+    /// drop the user's own modifiers.
+    private func pressModifiers(_ flags: CGEventFlags) {
+        let order: [(CGEventFlags, CGKeyCode)] = [
+            (.maskCommand, CGKeyCode(kVK_Command)),
+            (.maskControl, CGKeyCode(kVK_Control)),
+            (.maskShift, CGKeyCode(kVK_Shift)),
+            (.maskAlternate, CGKeyCode(kVK_Option)),
+            (.maskSecondaryFn, CGKeyCode(kVK_Function))
+        ]
+        for (flag, code) in order where flags.contains(flag) {
+            guard !syntheticModifiers.contains(flag), !CGEventSourceKeyState(.hidSystemState, code) else { continue }
+            postModifier(flag, code, down: true)
+        }
+    }
+
+    /// Releases the modifiers a stroke required, but only the ones this event
+    /// stream pressed and no other active hold still needs.
+    private func releaseModifiers(_ flags: CGEventFlags) {
+        let stillNeeded = activeHolds.values.reduce(CGEventFlags()) { partial, hold in
+            if case .key(_, let required) = hold { return partial.union(required) }
+            return partial
+        }
+        let releasable = flags.intersection(syntheticModifiers).subtracting(stillNeeded)
+        let order: [(CGEventFlags, CGKeyCode)] = [
+            (.maskSecondaryFn, CGKeyCode(kVK_Function)),
+            (.maskAlternate, CGKeyCode(kVK_Option)),
+            (.maskShift, CGKeyCode(kVK_Shift)),
+            (.maskControl, CGKeyCode(kVK_Control)),
+            (.maskCommand, CGKeyCode(kVK_Command))
+        ]
+        for (flag, code) in order where releasable.contains(flag) {
+            postModifier(flag, code, down: false)
+        }
     }
 
     private func sendKeyStroke(_ stroke: KeyStroke) {
         guard let code = effectiveKeyCode(for: stroke) else { return }
         let flags = modifierFlags(from: stroke.modifiers)
+        pressModifiers(flags)
         postKey(code, flags: flags, down: true)
         postKey(code, flags: flags, down: false)
+        releaseModifiers(flags)
     }
 
     private func mouseButton(_ action: MouseAction) -> CGMouseButton? {
