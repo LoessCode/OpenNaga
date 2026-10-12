@@ -15,6 +15,7 @@ final class HIDListener {
     private(set) var lastInputDescription = "No input detected. The DPI buttons require a recognized driver report."
     private let lock = NSLock()
     private var matcher = InputEdgeMatcher()
+    private var scrollMatcher = ScrollInputMatcher()
     private var runLoop: CFRunLoop?
     private var thread: Thread?
     private var manager: IOHIDManager?
@@ -96,12 +97,17 @@ final class HIDListener {
     }
 
     func resetCorrelation() {
-        lock.lock(); matcher.reset(); lock.unlock()
+        lock.lock(); matcher.reset(); scrollMatcher.reset(); lock.unlock()
     }
 
     func consume(buttonIndex: Int, down: Bool, timestamp: TimeInterval) -> Bool {
         lock.lock(); defer { lock.unlock() }
         return matcher.consume(button: buttonIndex, down: down, timestamp: timestamp)
+    }
+
+    func consumeScroll(vertical: Bool, horizontal: Bool, shifted: Bool, timestamp: TimeInterval) -> ScrollInputMatcher.Match {
+        lock.lock(); defer { lock.unlock() }
+        return scrollMatcher.consume(vertical: vertical, horizontal: horizontal, shifted: shifted, timestamp: timestamp)
     }
 
     private func identity(_ device: IOHIDDevice) -> String { String(describing: Unmanaged.passUnretained(device).toOpaque()) }
@@ -137,6 +143,16 @@ final class HIDListener {
         guard supported(device) else { return }
         let page = IOHIDElementGetUsagePage(element), usage = IOHIDElementGetUsage(element)
         let integer = IOHIDValueGetIntegerValue(value)
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        let timestamp = Double(IOHIDValueGetTimeStamp(value)) * Double(info.numer) / Double(info.denom) / 1_000_000_000
+        if let axis = NagaInput.scrollAxis(page: page, usage: usage, value: integer) {
+            let tiltButton = NagaInput.button(page: page, usage: usage, value: integer)
+            lock.lock()
+            scrollMatcher.record(axis: axis, button: tiltButton, timestamp: timestamp)
+            lock.unlock()
+            if axis == .vertical { return }
+        }
         let rawTilt = usesRawTiltDecoding &&
             (IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? Int) == 0x00b4 &&
             page == 9 && (usage == 6 || usage == 7)
@@ -148,9 +164,6 @@ final class HIDListener {
             guard valueStates[key, default: false] != down else { return }
             valueStates[key] = down
         }
-        var info = mach_timebase_info_data_t()
-        mach_timebase_info(&info)
-        let timestamp = Double(IOHIDValueGetTimeStamp(value)) * Double(info.numer) / Double(info.denom) / 1_000_000_000
         lock.lock()
         matcher.record(button: button, down: down, timestamp: timestamp)
         if !pan { if down { heldButtons.insert(button) } else { heldButtons.remove(button) } }
@@ -169,7 +182,7 @@ final class HIDListener {
         lock.lock()
         let changed = driverModeEnabled != enabled
         driverModeEnabled = enabled
-        if changed { rawState.reset(); matcher.reset() }
+        if changed { rawState.reset(); matcher.reset(); scrollMatcher.reset() }
         lock.unlock()
         if changed { EventTapManager.shared.resetInputState() }
     }

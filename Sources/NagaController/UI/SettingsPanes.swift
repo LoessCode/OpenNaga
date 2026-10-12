@@ -20,7 +20,7 @@ struct SensitivityPane: View {
             VStack(alignment: .leading, spacing: 24) {
                 HStack {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Sensor sensitivity").font(.title2.weight(.semibold))
+                        Text("Sensitivity").font(.title2.weight(.semibold))
                         Text("Hardware settings change only when you apply them.")
                             .foregroundStyle(.secondary)
                     }
@@ -76,6 +76,20 @@ struct SensitivityPane: View {
                 }
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Scroll sensitivity").font(.headline)
+                            Spacer()
+                            Button("Reset") { ConfigManager.shared.setScrollSensitivity(.baseline) }
+                                .disabled(ConfigManager.shared.scrollSensitivity == .baseline)
+                        }
+                        scrollSlider("Vertical wheel", axis: .vertical)
+                        scrollSlider("Horizontal / wheel tilt", axis: .horizontal)
+                        Text("Applies to the Naga's wheel, tilt and assigned scroll actions while OpenNaga is running with remapping enabled. These settings are not saved to the mouse.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
                         Toggle("Driver mode for the top buttons", isOn: Binding(
                             get: { device.driverModeEnabled },
                             set: { device.setDriverModeEnabled($0) }
@@ -107,6 +121,33 @@ struct SensitivityPane: View {
             dpiY = device.dpiY.map(String.init) ?? ""
         }
         if !editedRate, let value = device.pollingRate, [125, 500, 1000].contains(value) { rate = value }
+    }
+
+    private func scrollSlider(_ title: String, axis: ScrollAxis) -> some View {
+        let config = ConfigManager.shared
+        let binding = Binding<Double>(
+            get: { axis == .vertical ? config.scrollSensitivity.vertical : config.scrollSensitivity.horizontal },
+            set: { value in
+                var sensitivity = config.scrollSensitivity
+                if axis == .vertical { sensitivity.vertical = value } else { sensitivity.horizontal = value }
+                config.setScrollSensitivity(sensitivity)
+            }
+        )
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text("\(binding.wrappedValue, specifier: "%.1f")×")
+                    .monospacedDigit().foregroundStyle(.secondary)
+            }
+            Slider(value: binding, in: ScrollSensitivity.range, step: 0.1)
+                .accessibilityLabel(title)
+            HStack {
+                Text("Slower")
+                Spacer()
+                Text("Faster")
+            }.font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -151,7 +192,9 @@ struct StatusPane: View {
                         Image(systemName: "menubar.rectangle").font(.title2).foregroundStyle(UIStyle.accent)
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Keeps running in the background").font(.headline)
-                            Text(model.onboardActive ? (model.onboardName == nil ? "The last save is incomplete. Restore the previous assignments from Mouse Memory." : "The profile saved in the mouse keeps working after Quit. To go back to software remapping, restore the previous assignments from Mouse Memory.") : "Close the window to keep OpenNaga in the menu bar. Your assignments keep working in other apps. To stop the service, turn off Remapping or choose Quit.")
+                            Text(model.onboardActive ? (model.onboardName == nil ? "The last save is incomplete. Restore the previous assignments from Mouse Memory." : "The profile saved in the mouse keeps working after Quit. To go back to software remapping, restore the previous assignments from Mouse Memory.")
+                                 : model.onboardOnly ? "This profile was imported from the mouse. Edit it and use Save to Mouse to apply changes. Software remapping is paused because custom firmware assignments cannot identify physical controls reliably."
+                                 : "Close the window to keep OpenNaga in the menu bar. Your assignments keep working in other apps. To stop the service, turn off Remapping or choose Quit.")
                                 .font(.callout).foregroundStyle(.secondary)
                         }
                         Spacer()

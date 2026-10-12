@@ -32,6 +32,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             observers.append(NotificationCenter.default.addObserver(forName: HIDListener.didUpdateNotification, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.checkHardwareConnection() }
             })
+            observers.append(NotificationCenter.default.addObserver(forName: ConfigManager.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, !self.isTerminating,
+                          PermissionManager.shared.hasAccessibilityPermission(),
+                          PermissionManager.shared.hasInputMonitoringPermission() else { return }
+                    let listenOnly = !ConfigManager.shared.getRemappingEnabled() || OnboardProfileStore.isActive
+                    if EventTapManager.shared.isListeningOnly != listenOnly {
+                        EventTapManager.shared.start(listenOnly: listenOnly)
+                    }
+                    self.updateStatusItem()
+                }
+            })
             PermissionManager.shared.requestMissingPermissions()
             HIDListener.shared.start()
             RazerDeviceController.shared.refresh()

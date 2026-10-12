@@ -1,0 +1,21 @@
+name: Validate macOS build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the release executable
+        run: swift build -c release --product NagaController
+      - name: Run dependency-free regression checks
+        run: bash Scripts/test.sh

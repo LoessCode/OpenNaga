@@ -67,7 +67,10 @@ final class MacRazerUSBTransport: RazerTransport {
         _ = try transfer(device: device, bytes: request, reading: false)
         // Receiver-specific response wait in OpenRazer is 31ms.
         Thread.sleep(forTimeInterval: 0.035)
-        return try transfer(device: device, bytes: [UInt8](repeating: 0, count: 90), reading: true)
+        let response = try transfer(device: device, bytes: [UInt8](repeating: 0, count: 90), reading: true)
+        return try RazerReportCodec.finishResponse(response, for: request) {
+            try transfer(device: device, bytes: [UInt8](repeating: 0, count: 90), reading: true)
+        }
     }
 
     private final class Transfer {
@@ -97,12 +100,15 @@ final class MacRazerUSBTransport: RazerTransport {
             operation.result = result
         }
         let result: IOReturn
+        // The callback variants take the timeout in milliseconds despite the
+        // CFTimeInterval type; passing seconds times out after 1 ms.
+        let timeoutMilliseconds = timeout * 1000
         if reading {
             result = IOHIDDeviceGetReportWithCallback(device, kIOHIDReportTypeFeature, 0,
-                transfer.buffer, transfer.lengthPointer, timeout, callback, context)
+                transfer.buffer, transfer.lengthPointer, timeoutMilliseconds, callback, context)
         } else {
             result = IOHIDDeviceSetReportWithCallback(device, kIOHIDReportTypeFeature, 0,
-                transfer.buffer, 90, timeout, callback, context)
+                transfer.buffer, 90, timeoutMilliseconds, callback, context)
         }
         guard result == kIOReturnSuccess else {
             Unmanaged<Transfer>.fromOpaque(context).release()

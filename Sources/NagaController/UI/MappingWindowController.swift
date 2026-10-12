@@ -30,12 +30,15 @@ final class MappingWindowController: NSWindowController, NSWindowDelegate {
     func show() {
         guard let window else { return }
 
-        // The menu bar app remains an accessory even while settings are open.
-        NSApp.setActivationPolicy(.accessory)
+        // A regular app while the window is open, so it appears in Command-Tab
+        // and the Dock and reliably becomes key (Record Key needs a key window).
+        // Back to a menu bar accessory when the window closes.
+        NSApp.setActivationPolicy(.regular)
 
         window.delegate = self
         showWindow(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+        if #available(macOS 14.0, *) { NSApp.activate() } else { NSApp.activate(ignoringOtherApps: true) }
     }
 
     func windowWillClose(_ notification: Notification) {

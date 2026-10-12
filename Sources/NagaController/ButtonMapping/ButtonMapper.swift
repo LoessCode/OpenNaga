@@ -12,11 +12,32 @@ final class ButtonMapper {
     private var generation = 0
     private let eventSink: ((CGEvent) -> Void)?
     private let workspaceActionSink: ((SystemAction) -> Void)?
+    private let syntheticScrollScaler = ScrollEventScaler()
+    var scrollSensitivityProvider: () -> ScrollSensitivity = { ConfigManager.shared.scrollSensitivity }
     var systemShortcutPreferences: () -> [String: Any] = MacSystemShortcut.preferences
     // Synthetic keys come from a real event source so posting them updates the
     // system modifier state; apps that track that state ignore orphan flags.
     private let keyboardSource = CGEventSource(stateID: .hidSystemState)
     private var syntheticModifiers: CGEventFlags = []
+    private var physicalModifierStates: [CGKeyCode: Bool] = [:]
+    var modifierKeyState: (CGKeyCode) -> Bool = { CGEventSource.keyState(.hidSystemState, key: $0) }
+
+    private struct ModifierKey {
+        let flag: CGEventFlags
+        let code: CGKeyCode
+        let otherCode: CGKeyCode?
+        let deviceMask: UInt64
+        let otherDeviceMask: UInt64
+    }
+
+    // Device masks distinguish a physical modifier's left and right keys.
+    private static let modifierKeys: [ModifierKey] = [
+        ModifierKey(flag: .maskCommand, code: CGKeyCode(kVK_Command), otherCode: CGKeyCode(kVK_RightCommand), deviceMask: 0x08, otherDeviceMask: 0x10),
+        ModifierKey(flag: .maskControl, code: CGKeyCode(kVK_Control), otherCode: CGKeyCode(kVK_RightControl), deviceMask: 0x01, otherDeviceMask: 0x2000),
+        ModifierKey(flag: .maskShift, code: CGKeyCode(kVK_Shift), otherCode: CGKeyCode(kVK_RightShift), deviceMask: 0x02, otherDeviceMask: 0x04),
+        ModifierKey(flag: .maskAlternate, code: CGKeyCode(kVK_Option), otherCode: CGKeyCode(kVK_RightOption), deviceMask: 0x20, otherDeviceMask: 0x40),
+        ModifierKey(flag: .maskSecondaryFn, code: CGKeyCode(kVK_Function), otherCode: nil, deviceMask: CGEventFlags.maskSecondaryFn.rawValue, otherDeviceMask: 0)
+    ]
 
     init(eventSink: ((CGEvent) -> Void)? = nil, workspaceActionSink: ((SystemAction) -> Void)? = nil) {
         self.eventSink = eventSink
@@ -35,6 +56,7 @@ final class ButtonMapper {
     }
 
     func releaseAll() {
+        syntheticScrollScaler.reset()
         generation += 1
         for button in Array(activeHolds.keys) { handleRelease(buttonIndex: button) }
         pressed.removeAll()
@@ -53,8 +75,9 @@ final class ButtonMapper {
             if let code = effectiveKeyCode(for: keys[0]) {
                 let flags = modifierFlags(from: keys[0].modifiers)
                 pressModifiers(flags)
+                let alreadyHeld = activeHolds.values.contains { if case .key(let heldCode, _) = $0 { return heldCode == code }; return false }
                 activeHolds[buttonIndex] = .key(code, flags)
-                postKey(code, flags: flags, down: true)
+                if !alreadyHeld { postKey(code, flags: flags, down: true) }
             }
         case .mouse(let action, _):
             if let navigation = action.browserEquivalent, frontmostIsBrowser() {
@@ -126,10 +149,7 @@ final class ButtonMapper {
             // Modifier edges keep the system modifier state in sync, which
             // Command-Tab needs to close the app switcher and shortcuts in
             // general need to register their modifiers.
-            pressModifiers(stroke.flags)
-            postKey(stroke.keyCode, flags: stroke.flags, down: true)
-            postKey(stroke.keyCode, flags: stroke.flags, down: false)
-            releaseModifiers(stroke.flags)
+            sendKeyStroke(stroke.keyCode, flags: stroke.flags)
         } else if let workspaceActionSink {
             workspaceActionSink(action)
         } else {
@@ -152,9 +172,10 @@ final class ButtonMapper {
         else { event.post(tap: .cghidEventTap) }
     }
 
-    private func postKey(_ code: CGKeyCode, flags: CGEventFlags, down: Bool) {
+    private func postKey(_ code: CGKeyCode, flags: CGEventFlags, down: Bool, autorepeat: Bool = false) {
         let event = CGEvent(keyboardEventSource: keyboardSource, virtualKey: code, keyDown: down)
-        event?.flags = flags
+        event?.flags = flags.union(syntheticModifiers).union(physicalModifierFlags())
+        if autorepeat { event?.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
         post(event)
     }
 
@@ -162,24 +183,63 @@ final class ButtonMapper {
         syntheticModifiers = down ? syntheticModifiers.union(flag) : syntheticModifiers.subtracting(flag)
         let event = CGEvent(keyboardEventSource: keyboardSource, virtualKey: code, keyDown: down)
         event?.type = .flagsChanged
-        event?.flags = syntheticModifiers
+        event?.flags = syntheticModifiers.union(physicalModifierFlags())
         post(event)
+    }
+
+    /// A recreated tap must sample keys that changed while it was stopped.
+    func resetPhysicalModifierObservation() {
+        physicalModifierStates.removeAll()
+    }
+
+    /// Observe physical edges without consuming them. HID state alone cannot
+    /// distinguish our own modifier press from a later physical key press.
+    func observePhysicalModifier(_ event: CGEvent) {
+        guard event.type == .flagsChanged,
+              event.getIntegerValueField(.eventSourceUserData) != Self.syntheticMarker else { return }
+        let code = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        for modifier in Self.modifierKeys {
+            let mask: UInt64
+            if code == modifier.code { mask = modifier.deviceMask }
+            else if code == modifier.otherCode { mask = modifier.otherDeviceMask }
+            else { continue }
+            physicalModifierStates[code] = event.flags.rawValue & mask != 0
+            let required = activeHolds.values.reduce(CGEventFlags()) { flags, hold in
+                if case .key(_, let needed) = hold { return flags.union(needed) }
+                return flags
+            }
+            pressModifiers(required)
+            return
+        }
+    }
+
+    private func physicalModifierFlags() -> CGEventFlags {
+        var flags = CGEventFlags()
+        for modifier in Self.modifierKeys {
+            if physicalModifierStates[modifier.code] ?? (!syntheticModifiers.contains(modifier.flag) && modifierKeyState(modifier.code)) {
+                flags.formUnion(modifier.flag)
+                flags.formUnion(CGEventFlags(rawValue: modifier.deviceMask))
+            }
+            if let code = modifier.otherCode,
+               physicalModifierStates[code] ?? modifierKeyState(code) {
+                flags.formUnion(modifier.flag)
+                flags.formUnion(CGEventFlags(rawValue: modifier.otherDeviceMask))
+            }
+        }
+        return flags
     }
 
     /// Presses the modifiers a stroke needs. A modifier already down,
     /// physically or synthetically, is left alone so a release here can never
     /// drop the user's own modifiers.
     private func pressModifiers(_ flags: CGEventFlags) {
-        let order: [(CGEventFlags, CGKeyCode)] = [
-            (.maskCommand, CGKeyCode(kVK_Command)),
-            (.maskControl, CGKeyCode(kVK_Control)),
-            (.maskShift, CGKeyCode(kVK_Shift)),
-            (.maskAlternate, CGKeyCode(kVK_Option)),
-            (.maskSecondaryFn, CGKeyCode(kVK_Function))
-        ]
-        for (flag, code) in order where flags.contains(flag) {
-            guard !syntheticModifiers.contains(flag), !CGEventSourceKeyState(.hidSystemState, code) else { continue }
-            postModifier(flag, code, down: true)
+        for modifier in Self.modifierKeys where flags.contains(modifier.flag) {
+            guard !syntheticModifiers.contains(modifier.flag), !physicalModifierFlags().contains(modifier.flag) else { continue }
+            // Snapshot before posting, while HID state still reflects only the
+            // physical key. Later non-synthetic edges update this observation.
+            if physicalModifierStates[modifier.code] == nil { physicalModifierStates[modifier.code] = modifierKeyState(modifier.code) }
+            if let other = modifier.otherCode, physicalModifierStates[other] == nil { physicalModifierStates[other] = modifierKeyState(other) }
+            postModifier(modifier.flag, modifier.code, down: true)
         }
     }
 
@@ -191,24 +251,22 @@ final class ButtonMapper {
             return partial
         }
         let releasable = flags.intersection(syntheticModifiers).subtracting(stillNeeded)
-        let order: [(CGEventFlags, CGKeyCode)] = [
-            (.maskSecondaryFn, CGKeyCode(kVK_Function)),
-            (.maskAlternate, CGKeyCode(kVK_Option)),
-            (.maskShift, CGKeyCode(kVK_Shift)),
-            (.maskControl, CGKeyCode(kVK_Control)),
-            (.maskCommand, CGKeyCode(kVK_Command))
-        ]
-        for (flag, code) in order where releasable.contains(flag) {
-            postModifier(flag, code, down: false)
+        for modifier in Self.modifierKeys.reversed() where releasable.contains(modifier.flag) {
+            postModifier(modifier.flag, modifier.code, down: false)
         }
     }
 
     private func sendKeyStroke(_ stroke: KeyStroke) {
         guard let code = effectiveKeyCode(for: stroke) else { return }
         let flags = modifierFlags(from: stroke.modifiers)
+        sendKeyStroke(code, flags: flags)
+    }
+
+    private func sendKeyStroke(_ code: CGKeyCode, flags: CGEventFlags) {
         pressModifiers(flags)
-        postKey(code, flags: flags, down: true)
-        postKey(code, flags: flags, down: false)
+        let alreadyHeld = activeHolds.values.contains { if case .key(let heldCode, _) = $0 { return heldCode == code }; return false }
+        postKey(code, flags: flags, down: true, autorepeat: alreadyHeld)
+        if !alreadyHeld { postKey(code, flags: flags, down: false) }
         releaseModifiers(flags)
     }
 
@@ -247,7 +305,12 @@ final class ButtonMapper {
         case .scrollUp, .scrollDown, .scrollLeft, .scrollRight:
             let vertical: Int32 = action == .scrollUp ? 3 : action == .scrollDown ? -3 : 0
             let horizontal: Int32 = action == .scrollLeft ? 3 : action == .scrollRight ? -3 : 0
-            post(CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: vertical, wheel2: horizontal, wheel3: 0))
+            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2,
+                wheel1: vertical, wheel2: horizontal, wheel3: 0) else { return }
+            syntheticScrollScaler.apply(to: event, sensitivity: scrollSensitivityProvider())
+            if ScrollEventScaler.hasMotion(event, axis: .vertical) || ScrollEventScaler.hasMotion(event, axis: .horizontal) {
+                post(event)
+            }
         default: break
         }
     }

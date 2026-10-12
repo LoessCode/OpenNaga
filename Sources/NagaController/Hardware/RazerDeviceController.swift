@@ -37,6 +37,11 @@ final class RazerDeviceController {
         EventTapManager.shared.stop()
         submit(.restoreOnboard)
     }
+    // Read-only: creates a local profile for editing and explicit mouse saves.
+    func importOnboard() {
+        guard !isBusy, !shuttingDown else { return }
+        submit(.importOnboard)
+    }
 
     // The app must defer termination until this callback. Failed restores retain
     // the journal for an explicit recovery attempt on a later launch.
@@ -48,7 +53,7 @@ final class RazerDeviceController {
     func recoverOriginalMode() { submit(.recover) }
 
     private enum Operation: Sendable {
-        case refresh, dpi(Int, Int), polling(Int), mode(Bool), restore, recover, onboard(OnboardProfilePlan), restoreOnboard
+        case refresh, dpi(Int, Int), polling(Int), mode(Bool), restore, recover, onboard(OnboardProfilePlan), restoreOnboard, importOnboard
     }
     private func submit(_ operation: Operation, completion: (@MainActor @Sendable () -> Void)? = nil) {
         guard !shuttingDown || completion != nil else { return }
@@ -77,6 +82,11 @@ final class RazerDeviceController {
                     if !self.shuttingDown, PermissionManager.shared.hasAccessibilityPermission(), PermissionManager.shared.hasInputMonitoringPermission() {
                         EventTapManager.shared.start(listenOnly: !ConfigManager.shared.getRemappingEnabled())
                     }
+                case .importOnboard:
+                    guard let functions = outcome.imported else { break }
+                    let result = OnboardProfilePlan.mapping(from: functions)
+                    let name = ConfigManager.shared.createProfile(named: "From Mouse", mapping: result.mapping, onboardOnly: true)
+                    self.statusMessage = (["Imported supported assignments into profile \(name). Edit this profile and use Save to Mouse to apply changes. Software remapping is paused for imported profiles."] + result.issues).joined(separator: "\n")
                 default: break
                 }
                 self.notify()
@@ -98,6 +108,7 @@ final class RazerDeviceController {
             let snapshot: RazerHardwareSnapshot?
             let message: String
             let recoveryPending: Bool
+            var imported: [UInt8: [UInt8]]? = nil
         }
         private let journalURL = DataFolder.file("driver-mode-recovery.json")
         private var modeChangedThisSession = false
@@ -119,6 +130,7 @@ final class RazerDeviceController {
                 connected = true
                 let session = RazerHardwareSession(transport: transport)
                 var onboardMessage: String?
+                var imported: [UInt8: [UInt8]]?
                 switch operation {
                 case .refresh: break
                 case .dpi(let x, let y): try session.setDPI(x: x, y: y)
@@ -132,6 +144,8 @@ final class RazerDeviceController {
                 case .restoreOnboard:
                     try OnboardProfileStore.restore(session: session, identity: transport.identity)
                     onboardMessage = "Previous assignments restored. Software remapping is available."
+                case .importOnboard:
+                    imported = try RazerOnboardBindings.readFunctions(session: session, profile: 0)
                 case .mode(let enabled):
                     let current = try session.readMode()
                     let target: UInt8 = enabled ? 3 : 0
@@ -173,7 +187,7 @@ final class RazerDeviceController {
                         : "Hardware values read over USB."
                 return Outcome(connected: true, snapshot: snapshot,
                                message: ([onboardMessage ?? message] + snapshot.warnings).joined(separator: "\n"),
-                               recoveryPending: recoveryPending)
+                               recoveryPending: recoveryPending, imported: imported)
             } catch {
                 return Outcome(connected: connected, snapshot: nil, message: error.localizedDescription,
                                recoveryPending: FileManager.default.fileExists(atPath: journalURL.path))

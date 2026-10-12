@@ -12,10 +12,11 @@ final class EventTapManager {
     private(set) var isRunning = false
     private var activeDownButtons: Set<Int> = []
     private var repeatOwnership = InputRepeatOwnership()
+    private let scrollScaler = ScrollEventScaler()
 
     private(set) var isListeningOnly: Bool = true
     var isRemappingEnabled: Bool {
-        get { return !isListeningOnly }
+        get { return !isListeningOnly && !ConfigManager.shared.currentProfileIsOnboardOnly }
         set {
             let newListenOnly = !newValue
             if newListenOnly != isListeningOnly {
@@ -28,10 +29,11 @@ final class EventTapManager {
 
     func start(listenOnly: Bool) {
         stop()
-        let listenOnly = listenOnly || OnboardProfileStore.isActive
+        ButtonMapper.shared.resetPhysicalModifierObservation()
+        let listenOnly = listenOnly || OnboardProfileStore.isActive || ConfigManager.shared.currentProfileIsOnboardOnly
         isListeningOnly = listenOnly
 
-        let types: [CGEventType] = [.keyDown, .keyUp, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp, .scrollWheel, .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
+        let types: [CGEventType] = [.keyDown, .keyUp, .flagsChanged, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp, .scrollWheel, .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
         let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
 
         var options: CGEventTapOptions = listenOnly ? .listenOnly : .defaultTap
@@ -94,6 +96,7 @@ final class EventTapManager {
     func resetInputState() {
         activeDownButtons.removeAll()
         repeatOwnership.reset()
+        scrollScaler.reset()
         ButtonMapper.shared.releaseAll()
         HIDListener.shared.resetCorrelation()
     }
@@ -109,12 +112,17 @@ final class EventTapManager {
         if event.getIntegerValueField(.eventSourceUserData) == ButtonMapper.syntheticMarker {
             return Unmanaged.passUnretained(event)
         }
+        if type == .flagsChanged {
+            ButtonMapper.shared.observePhysicalModifier(event)
+            return Unmanaged.passUnretained(event)
+        }
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             manager.resetInputState()
             if let tap = manager.eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
-        guard !manager.isListeningOnly else { return Unmanaged.passUnretained(event) }
+        guard manager.isRemappingEnabled else { return Unmanaged.passUnretained(event) }
+        if type == .scrollWheel { return manager.handleScroll(event) }
         if [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type),
            let drag = ButtonMapper.shared.dragEvent(for: event) {
             return Unmanaged.passRetained(drag)
@@ -136,10 +144,6 @@ final class EventTapManager {
             let number = event.getIntegerValueField(.mouseEventButtonNumber)
             button = number == 2 ? 17 : HIDListener.shared.usesRawTiltDecoding && (5...6).contains(number) ? Int(number) + 10 : nil
             down = type == .otherMouseDown
-        case .scrollWheel:
-            let horizontal = event.getIntegerValueField(.scrollWheelEventDeltaAxis2)
-            button = horizontal == 0 ? nil : horizontal > 0 ? 15 : 16
-            down = true
         default: return Unmanaged.passUnretained(event)
         }
         guard let button else { return Unmanaged.passUnretained(event) }
@@ -150,22 +154,42 @@ final class EventTapManager {
         if down {
             guard ButtonMapper.shared.hasMapping(buttonIndex: button) else { return Unmanaged.passUnretained(event) }
             if HIDListener.shared.usesRawTiltDecoding && (15...16).contains(button) {
-                if type != .scrollWheel { manager.activeDownButtons.insert(button) }
+                manager.activeDownButtons.insert(button)
                 return nil // Raw reports alone execute tilt actions in driver mode.
             }
-            if type == .scrollWheel {
-                if !HIDListener.shared.isRawControlHeld(button) { ButtonMapper.shared.handle(buttonIndex: button) }
-            }
-            else {
-                manager.activeDownButtons.insert(button)
-                if type == .keyDown { manager.repeatOwnership.claim(button: button, signature: signature) }
-                ButtonMapper.shared.handlePress(buttonIndex: button)
-            }
+            manager.activeDownButtons.insert(button)
+            if type == .keyDown { manager.repeatOwnership.claim(button: button, signature: signature) }
+            ButtonMapper.shared.handlePress(buttonIndex: button)
             return nil
         }
         guard manager.activeDownButtons.remove(button) != nil else { return Unmanaged.passUnretained(event) }
         manager.repeatOwnership.invalidate(button: button)
         ButtonMapper.shared.handleRelease(buttonIndex: button)
         return nil
+    }
+
+    private func handleScroll(_ event: CGEvent) -> Unmanaged<CGEvent>? {
+        guard ScrollEventScaler.isDiscreteHardwareEvent(event) else { return Unmanaged.passUnretained(event) }
+        let match = HIDListener.shared.consumeScroll(
+            vertical: ScrollEventScaler.hasMotion(event, axis: .vertical),
+            horizontal: ScrollEventScaler.hasMotion(event, axis: .horizontal),
+            shifted: event.flags.contains(.maskShift),
+            timestamp: Double(event.timestamp) / 1_000_000_000
+        )
+        guard !match.isEmpty else { return Unmanaged.passUnretained(event) }
+        var suppressHorizontal = false
+        if let button = match.horizontalButton, ButtonMapper.shared.hasMapping(buttonIndex: button) {
+            suppressHorizontal = true
+            if !HIDListener.shared.usesRawTiltDecoding && !HIDListener.shared.isRawControlHeld(button) {
+                ButtonMapper.shared.handle(buttonIndex: button)
+            }
+        }
+        scrollScaler.apply(to: event, sensitivity: ConfigManager.shared.scrollSensitivity,
+            vertical: match.vertical, horizontal: match.horizontalButton != nil || match.shiftedWheel,
+            suppressHorizontal: suppressHorizontal)
+        // A combined event can still carry vertical motion after consuming tilt.
+        if !ScrollEventScaler.hasMotion(event, axis: .vertical)
+            && !ScrollEventScaler.hasMotion(event, axis: .horizontal) { return nil }
+        return Unmanaged.passUnretained(event)
     }
 }

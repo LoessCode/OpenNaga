@@ -27,6 +27,7 @@ enum SystemActionTests {
         var events: [CGEvent] = []
         var workspaceActions: [SystemAction] = []
         let mapper = ButtonMapper(eventSink: { events.append($0) }, workspaceActionSink: { workspaceActions.append($0) })
+        mapper.modifierKeyState = { _ in false }
         mapper.systemShortcutPreferences = { [:] }
         let mediaKeys: [(SystemAction, Int)] = [
             (.volumeUp, 0), (.volumeDown, 1), (.mute, 7),
@@ -72,10 +73,13 @@ enum SystemActionTests {
             mapper.updateMapping([1: .system(action: action, description: nil)])
             mapper.handlePress(buttonIndex: 1)
             mapper.handlePress(buttonIndex: 1)
-            let expectedCount = action == .switchApplication ? 3 : 2
+            let modifierCount = [.maskCommand, .maskControl, .maskShift, .maskAlternate, .maskSecondaryFn].filter { flags.contains($0) }.count
+            let expectedCount = 2 + modifierCount * 2
             try check(events.count == expectedCount, "System shortcut ignores duplicate press: \(action)")
-            try check(events.prefix(2).map(\.type) == [.keyDown, .keyUp], "System shortcut balances key edges: \(action)")
-            try check(events.prefix(2).allSatisfy { $0.getIntegerValueField(.keyboardEventKeycode) == code && $0.flags == flags }, "System shortcut key and modifiers: \(action)")
+            let keyEvents = events.filter { $0.type == .keyDown || $0.type == .keyUp }
+            try check(keyEvents.map(\.type) == [.keyDown, .keyUp], "System shortcut balances key edges: \(action)")
+            try check(keyEvents.allSatisfy { $0.getIntegerValueField(.keyboardEventKeycode) == code && $0.flags == flags }, "System shortcut key and modifiers: \(action)")
+            try check(events.filter { $0.type == .flagsChanged }.count == modifierCount * 2, "System shortcut balances modifier edges: \(action)")
             try check(events.allSatisfy { $0.getIntegerValueField(.eventSourceUserData) == ButtonMapper.syntheticMarker }, "System shortcut events are tagged: \(action)")
             mapper.handleRelease(buttonIndex: 1)
             mapper.releaseAll()
@@ -107,14 +111,14 @@ enum SystemActionTests {
         events.removeAll()
         mapper.systemShortcutPreferences = { ["175": override()] }
         try check(mapper.performSystem(.doNotDisturb) == nil, "Configured Do Not Disturb can run")
-        try check(events.count == 2 && events[0].getIntegerValueField(.keyboardEventKeycode) == 96, "Do Not Disturb sends the configured key")
+        try check(events.count == 6 && events[2].getIntegerValueField(.keyboardEventKeycode) == 96, "Do Not Disturb sends the configured key")
         events.removeAll()
         mapper.systemShortcutPreferences = { ["175": override(enabled: false)] }
         try check(mapper.performSystem(.doNotDisturb) == SystemAction.doNotDisturb.shortcutSetupMessage, "Missing shortcut returns setup instructions")
         try check(events.isEmpty, "Disabled Do Not Disturb emits no key")
         mapper.systemShortcutPreferences = { ["28": override()] }
         mapper.performSystem(.screenshot)
-        try check(events.count == 2 && events[0].flags == [.maskControl, .maskAlternate], "Runner reads current shortcut preferences")
+        try check(events.count == 6 && events[2].flags == [.maskControl, .maskAlternate], "Runner reads current shortcut preferences")
 
         for action in [SystemAction.spotlight, .finder, .systemSettings, .hideApplication] {
             events.removeAll()

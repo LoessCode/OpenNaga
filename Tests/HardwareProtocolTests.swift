@@ -58,6 +58,46 @@ enum HardwareProtocolTests {
         }
         try rejects("unknown mode") { _ = try RazerCommand.setMode(2) }
         let goodPolling = packet([2, 0x1f, 0, 0, 0, 1, 0, 0x85, 1], crc: 0x85)
+        let pollingRequest = try RazerReportCodec.encode(.getPolling)
+        try check(!RazerReportCodec.needsResponsePoll(goodPolling, for: pollingRequest), "Matching response completes without another feature read")
+        var pending = goodPolling
+        pending[0] = 1
+        try check(RazerReportCodec.needsResponsePoll(pending, for: pollingRequest), "Busy response is polled without resending the command")
+        var responseReads = 0
+        let completed = try RazerReportCodec.finishResponse(pending, for: pollingRequest, pause: { _ in }) {
+            responseReads += 1
+            return responseReads < 3 ? pending : goodPolling
+        }
+        try check(completed == goodPolling && responseReads == 3, "Busy receiver finishes by reading its response without replaying a SET")
+        responseReads = 0
+        try rejects("Busy response polling exhaustion") {
+            _ = try RazerReportCodec.finishResponse(pending, for: pollingRequest, pause: { _ in }) {
+                responseReads += 1
+                return pending
+            }
+        }
+        try check(responseReads == 20, "Persistent busy response polling is bounded and throws before session retry")
+        var stale = goodPolling
+        stale[7] = 5
+        stale[88] = RazerReportCodec.checksum(stale)
+        try check(RazerReportCodec.needsResponsePoll(stale, for: pollingRequest), "Valid reply to a previous command is polled")
+        stale[88] ^= 1
+        try check(!RazerReportCodec.needsResponsePoll(stale, for: pollingRequest), "Corrupt response is rejected rather than hidden by polling")
+        for status: UInt8 in [3, 4, 5] {
+            pending[0] = status
+            try check(!RazerReportCodec.needsResponsePoll(pending, for: pollingRequest), "Matched firmware error is returned without polling")
+        }
+        let readAssignment = try RazerOnboardBindings.readCommand(profile: 1, buttonID: 64)
+        let assignmentRequest = try RazerReportCodec.encode(readAssignment)
+        var assignmentResponse = assignmentRequest
+        assignmentResponse[0] = 2
+        assignmentResponse[9] = 65
+        assignmentResponse[88] = RazerReportCodec.checksum(assignmentResponse)
+        try check(RazerReportCodec.needsResponsePoll(assignmentResponse, for: assignmentRequest), "Stale onboard control read is polled despite an identical command header")
+        assignmentResponse[9] = 64
+        assignmentResponse[10] = 1
+        assignmentResponse[88] = RazerReportCodec.checksum(assignmentResponse)
+        try check(!RazerReportCodec.needsResponsePoll(assignmentResponse, for: assignmentRequest), "Onboard reply metadata does not change the requested normal layer")
         try check(RazerReportCodec.decode(goodPolling, for: .getPolling) == [1], "Decode fixture")
         for size in [0, 1, 89, 91] {
             try rejects("length \(size)") { _ = try RazerReportCodec.decode([UInt8](repeating: 0, count: size), for: .getPolling) }
@@ -167,7 +207,10 @@ enum HardwareProtocolTests {
         }
         let factory: [UInt8] = [1, 64, 0, 2, 1, 0, 30, 0, 0, 0]
         try check(RazerOnboardBinding(bytes: factory, profile: 1, buttonID: 64).bytes == factory, "Preserve factory descriptor including nonstandard length")
-        for field in [0, 1, 2] {
+        var flagged = factory
+        flagged[2] = 1
+        try check(RazerOnboardBinding(bytes: flagged, profile: 1, buttonID: 64).bytes == factory, "Reply byte 2 is a status, normalized to the normal layer")
+        for field in [0, 1] {
             var wrong = factory
             wrong[field] ^= 1
             try rejects("Onboard identity field") { _ = try RazerOnboardBinding(bytes: wrong, profile: 1, buttonID: 64) }
@@ -180,6 +223,13 @@ enum HardwareProtocolTests {
         let bindings = try RazerOnboardBindings.read(session: session, profile: 1)
         try check(bindings.count == 1 && bindings[0].bytes == factory, "Read stored descriptor")
         try check(fake.requests.allSatisfy { $0[7] & 0x80 != 0 }, "Onboard inspection never changes the mouse")
+        fake.requests = []
+        fake.replies = [try reply(RazerOnboardBindings.getButtonIDs, [1, 64] + Array(repeating: 0, count: 20)), try reply(onboard, factory)]
+        try rejects("Incomplete layout cannot be imported") { _ = try RazerOnboardBindings.readFunctions(session: session, profile: 1) }
+        try check(fake.requests.count == 2 && fake.requests.allSatisfy { $0[7] & 0x80 != 0 }, "Rejected incomplete import issues only reads")
+        fake.requests = []
+        try rejects("Unsupported import bank") { _ = try RazerOnboardBindings.readFunctions(session: session, profile: 2) }
+        try check(fake.requests.isEmpty, "Unsupported import bank makes no USB request")
         return passed
     }
 }

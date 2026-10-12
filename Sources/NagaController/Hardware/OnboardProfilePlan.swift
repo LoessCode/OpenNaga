@@ -60,9 +60,73 @@ struct OnboardProfilePlan {
         }
     }
 
+    // Imported profiles run on the mouse, so retain native assignments too.
+    // Software cannot identify physical buttons from arbitrary firmware outputs.
+    static func mapping(from functions: [UInt8: [UInt8]]) -> (mapping: [Int: ActionType], issues: [String]) {
+        var mapping: [Int: ActionType] = [:]
+        var issues: [String] = []
+        for (index, id) in buttonIDs.sorted(by: { $0.key < $1.key }) {
+            guard let function = functions[id] else { continue }
+            if let action = action(from: function) {
+                mapping[index] = action
+            } else if function.count == 7, function[0] == 2, (0xe0...0xe7).contains(function[3]) {
+                issues.append("Button \(index): a modifier key on its own cannot be imported.")
+            } else {
+                issues.append("Button \(index): unsupported assignment \(function.map { String(format: "%02x", $0) }.joined(separator: " ")).")
+            }
+        }
+        // Wheel rotation has no editable button index. Report a custom binding
+        // rather than presenting a partial import as a complete editable layout.
+        let wheelDefaults: [UInt8: [UInt8]] = [9: [1, 1, 9, 0, 0, 0, 0], 10: [1, 1, 10, 0, 0, 0, 0]]
+        let editable = Set(buttonIDs.values)
+        for id in functions.keys.sorted() where !editable.contains(id) {
+            guard functions[id] != wheelDefaults[id] else { continue }
+            issues.append(String(format: "Control 0x%02x: this assignment cannot be edited in OpenNaga.", id))
+        }
+        return (mapping, issues)
+    }
+
+    static func action(from function: [UInt8]) -> ActionType? {
+        guard function.count == 7 else { return nil }
+        if function.allSatisfy({ $0 == 0 }) { return .disabled }
+        let action: ActionType?
+        switch (function[0], function[1]) {
+        case (1, 1):
+            let buttons: [UInt8: MouseAction] = [1: .leftClick, 2: .rightClick, 3: .middleClick, 4: .button4,
+                                                 5: .button5, 9: .scrollUp, 10: .scrollDown]
+            action = buttons[function[2]].map { .mouse(action: $0, description: nil) }
+        case (6, 1):
+            let stages: [UInt8: MouseAction] = [1: .dpiUp, 2: .dpiDown]
+            action = stages[function[2]].map { .mouse(action: $0, description: nil) }
+        case (0x0e, 3):
+            let tilt: [UInt8: MouseAction] = [0x68: .scrollLeft, 0x69: .scrollRight]
+            action = tilt[function[2]].map { .mouse(action: $0, description: nil) }
+        case (0x0a, 2):
+            action = media.first { $0.value == function[3] }.map { .system(action: $0.key, description: nil) }
+        case (2, 1), (2, 2):
+            // Factory bindings use length 1 without a modifier byte but keep the usage in function[3].
+            let mask = function[1] == 2 ? function[2] : 0
+            guard mask & 0xf0 == 0, let code = keyboardCodes[function[3]] else { return nil }
+            let bits: [(UInt8, String)] = [(1, "ctrl"), (2, "shift"), (4, "alt"), (8, "cmd")]
+            // Same naming as Record Key, so imported keys read like recorded ones.
+            let stroke = KeyboardKeyCatalog.capturedStroke(code: code, characters: nil,
+                                                           modifiers: bits.compactMap { mask & $0.0 != 0 ? $0.1 : nil })
+            action = .keySequence(keys: [stroke], description: nil)
+        default:
+            return nil
+        }
+        guard let action, var encoded = try? Self.function(action) else { return nil }
+        // The receiver's factory keyboard descriptors use this known length-1
+        // variant. Every other byte must round trip, including consumer usage
+        // high bytes and scroll-repeat parameters; unknown data is not guessed.
+        if function[0] == 2 && function[1] == 1 { encoded[1] = 1 }
+        return encoded == function ? action : nil
+    }
+
+    static let media: [SystemAction: UInt8] = [.volumeUp: 0xe9, .volumeDown: 0xea, .mute: 0xe2,
+                                              .playPause: 0xcd, .nextTrack: 0xb5, .previousTrack: 0xb6]
+
     private static func system(_ action: SystemAction) throws -> [UInt8] {
-        let media: [SystemAction: UInt8] = [.volumeUp: 0xe9, .volumeDown: 0xea, .mute: 0xe2,
-                                           .playPause: 0xcd, .nextTrack: 0xb5, .previousTrack: 0xb6]
         if let usage = media[action] { return [0x0a, 2, 0, usage, 0, 0, 0] }
         if let shortcut = action.shortcut?.resolve(in: MacSystemShortcut.preferences()) {
             guard !shortcut.flags.contains(.maskSecondaryFn) else { throw unsupported("the Mac Fn key needs the app.") }
@@ -103,4 +167,7 @@ struct OnboardProfilePlan {
         result[81] = 0x67
         return result
     }()
+
+    static let keyboardCodes: [UInt8: UInt16] = Dictionary(keyboardUsages.map { ($0.value, $0.key) },
+                                                           uniquingKeysWith: { min($0, $1) })
 }

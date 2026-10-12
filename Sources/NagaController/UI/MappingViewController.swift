@@ -73,8 +73,9 @@ struct NagaWorkspace: View {
                     StatusDot(active: model.connected && model.remappingActive)
                     Text(model.serviceStatus)
                     Spacer()
-                    Image(systemName: model.onboardActive ? "memorychip" : "menubar.rectangle")
-                    Text(model.onboardActive ? (model.onboardName == nil ? "Mouse restore needed" : "Works even after Quit") : "Keeps running when you close the window")
+                    Image(systemName: model.onboardActive || model.onboardOnly ? "memorychip" : "menubar.rectangle")
+                    Text(model.onboardActive ? (model.onboardName == nil ? "Mouse restore needed" : "Works even after Quit")
+                         : model.onboardOnly ? "Apply edits with Save to Mouse" : "Keeps running when you close the window")
                 }.font(.system(size: 11)).foregroundStyle(.secondary)
                     .padding(.horizontal, 20).frame(height: 32)
             }
@@ -113,6 +114,7 @@ struct NagaWorkspace: View {
                             .foregroundStyle(model.section == section ? UIStyle.accent : .primary)
                             .background(model.section == section ? UIStyle.selection : .clear)
                             .clipShape(RoundedRectangle(cornerRadius: 7))
+                            .contentShape(RoundedRectangle(cornerRadius: 7)) // Whole row, not just the label.
                     }.buttonStyle(.plain)
                         .accessibilityAddTraits(model.section == section ? [.isSelected] : [])
                 }
@@ -130,8 +132,9 @@ struct NagaWorkspace: View {
                 Toggle("Remapping", isOn: Binding(
                     get: { model.remappingEnabled }, set: model.setRemapping
                 )).toggleStyle(.switch).controlSize(.small).font(.system(size: 12))
-                    .disabled(model.onboardActive || RazerDeviceController.shared.isBusy)
+                    .disabled(model.onboardActive || model.onboardOnly || RazerDeviceController.shared.isBusy)
                 if model.onboardActive { Text("Saved in mouse").font(.caption).foregroundStyle(.secondary) }
+                else if model.onboardOnly { Text("Use Save to Mouse").font(.caption).foregroundStyle(.secondary) }
             }.padding(18)
         }.frame(width: 184).frame(maxHeight: .infinity)
             .background(SidebarMaterial())

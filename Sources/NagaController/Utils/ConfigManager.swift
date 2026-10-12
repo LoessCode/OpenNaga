@@ -17,6 +17,9 @@ struct Settings: Codable {
 
 struct Profile: Codable {
     var buttons: [String: ButtonAction]
+    // Imported firmware assignments cannot reliably identify physical controls
+    // through the factory keyboard/mouse event decoder.
+    var onboardOnly: Bool? = nil
 }
 
 struct ButtonAction: Codable {
@@ -42,10 +45,15 @@ final class ConfigManager {
 
     private(set) var profiles: [String: Profile] = [:]
     private(set) var currentProfileName: String = "Default"
+    private(set) var scrollSensitivity: ScrollSensitivity
 
     init(storageURL: URL? = nil, defaults: UserDefaults = .standard) {
         self.storageURL = storageURL
         self.defaults = defaults
+        self.scrollSensitivity = ScrollSensitivity(
+            vertical: (defaults.object(forKey: ScrollSensitivity.verticalKey) as? NSNumber)?.doubleValue ?? 1,
+            horizontal: (defaults.object(forKey: ScrollSensitivity.horizontalKey) as? NSNumber)?.doubleValue ?? 1
+        ).clamped()
     }
 
     func load() {
@@ -96,7 +104,7 @@ final class ConfigManager {
         if profiles[currentProfileName] == nil {
             currentProfileName = profiles.keys.sorted().first ?? "Default"
         }
-        ButtonMapper.shared.updateMapping(mappingForCurrentProfile())
+        updateRuntimeMapping()
         notify()
     }
 
@@ -104,17 +112,26 @@ final class ConfigManager {
         guard profiles[name] != nil else { return }
         currentProfileName = name
         defaults.set(name, forKey: kCurrentProfileKey)
-        ButtonMapper.shared.updateMapping(mappingForCurrentProfile())
+        updateRuntimeMapping()
         saveUserProfiles()
     }
 
     func getRemappingEnabled() -> Bool {
-        return defaults.bool(forKey: kRemappingEnabledKey)
+        return !currentProfileIsOnboardOnly && defaults.bool(forKey: kRemappingEnabledKey)
     }
+
+    var currentProfileIsOnboardOnly: Bool { profiles[currentProfileName]?.onboardOnly == true }
 
     func setRemappingEnabled(_ enabled: Bool) {
         defaults.set(enabled, forKey: kRemappingEnabledKey)
         if !enabled { EventTapManager.shared.resetInputState() }
+        notify()
+    }
+
+    func setScrollSensitivity(_ sensitivity: ScrollSensitivity) {
+        scrollSensitivity = sensitivity.clamped()
+        defaults.set(scrollSensitivity.vertical, forKey: ScrollSensitivity.verticalKey)
+        defaults.set(scrollSensitivity.horizontal, forKey: ScrollSensitivity.horizontalKey)
         notify()
     }
 
@@ -148,6 +165,18 @@ final class ConfigManager {
         return true
     }
 
+    // Creates and selects a profile from a complete mapping, e.g. one read from the mouse.
+    // Returns the name used, adding a number when the name is taken.
+    @discardableResult
+    func createProfile(named base: String, mapping: [Int: ActionType], onboardOnly: Bool = false) -> String {
+        var name = base
+        var suffix = 2
+        while profiles[name] != nil { name = "\(base) \(suffix)"; suffix += 1 }
+        profiles[name] = Profile(buttons: Dictionary(uniqueKeysWithValues: mapping.map { (String($0.key), toButtonAction($0.value)) }), onboardOnly: onboardOnly ? true : nil)
+        setCurrentProfile(name)
+        return name
+    }
+
     @discardableResult
     func duplicateProfile(source: String, as newName: String) -> Bool {
         guard profiles[source] != nil else { return false }
@@ -169,7 +198,7 @@ final class ConfigManager {
         }
         if currentProfileName == oldName { currentProfileName = newTrim }
         defaults.set(currentProfileName, forKey: kCurrentProfileKey)
-        ButtonMapper.shared.updateMapping(mappingForCurrentProfile())
+        updateRuntimeMapping()
         saveUserProfiles()
         return true
     }
@@ -187,7 +216,7 @@ final class ConfigManager {
             }
         } else {
             // refresh mapping for current profile
-            ButtonMapper.shared.updateMapping(mappingForCurrentProfile())
+            updateRuntimeMapping()
         }
         saveUserProfiles()
         return true
@@ -207,7 +236,7 @@ final class ConfigManager {
             setCurrentProfile(cp)
         } else {
             if profiles[currentProfileName] == nil { currentProfileName = profiles.keys.sorted().first ?? "Default" }
-            ButtonMapper.shared.updateMapping(mappingForCurrentProfile())
+            updateRuntimeMapping()
         }
         saveUserProfiles()
     }
@@ -295,7 +324,7 @@ final class ConfigManager {
             profile.buttons.removeValue(forKey: key)
         }
         profiles[currentProfileName] = profile
-        ButtonMapper.shared.updateMapping(mappingForCurrentProfile())
+        updateRuntimeMapping()
         saveUserProfiles()
     }
 
@@ -319,6 +348,10 @@ final class ConfigManager {
 
     private func notify() {
         DispatchQueue.main.async { NotificationCenter.default.post(name: Self.didChangeNotification, object: self) }
+    }
+
+    private func updateRuntimeMapping() {
+        ButtonMapper.shared.updateMapping(currentProfileIsOnboardOnly ? [:] : mappingForCurrentProfile())
     }
 
     private func userProfilesURL() throws -> URL {

@@ -18,10 +18,15 @@ OpenNaga is an independent project, not affiliated with or endorsed by Razer. It
 - Existing text snippets remain saved and can be replaced through the Keys editor
 - Save a profile to the mouse's onboard memory: it keeps working after you quit OpenNaga, on another computer and over Bluetooth
 - Profiles with auto-save on the Mac, import/export as JSON, rename/duplicate/delete
+- Import the mouse's current assignments into an editable local profile for explicit Save to Mouse
 - DPI (100 to 30000 per axis) and polling rate (125/500/1000 Hz) read and written through the Razer USB protocol, with read-back verification
+- Separate vertical-wheel and horizontal/tilt sensitivity sliders, from 0.1× to 5×, applied in software while remapping is enabled
 - Optional "driver mode" for the top DPI buttons, with journaled restore of the original mode at quit
 - Menu bar popover with profile selection and remapping toggle; closing the settings window keeps the service running
+- Settings appear in the Dock and Command-Tab while the window is open
 - Remapping activity prevents App Nap while allowing normal system sleep
+
+The current source on `main` includes scroll sensitivity, mouse-profile import and the modifier/USB fixes from the October 12 audit. The latest packaged release is still 2.4.0; build from source to use these changes.
 
 ## Requirements
 
@@ -67,6 +72,10 @@ What the mouse can store:
 Key sequences, macros, shell commands, application launching, profile switching and Fn shortcuts need the app. If the profile contains one of them, OpenNaga lists the affected buttons and does not save. Key repeat and long presses follow the mouse firmware.
 
 Each save keeps a backup of the mouse's previous assignments and reads every button back to confirm the write. **Restore Previous Assignments** in the same window puts the backup back and re-enables software remapping. OpenNaga never writes to the mouse at startup, on refresh or at quit, only when you click Save or Restore.
+
+**Import from Mouse** in the Mouse Memory window reads the active assignments into a new **From Mouse** profile. Import performs no hardware writes. Supported keys, modifiers, mouse actions, DPI and media controls remain editable; unsupported assignments are listed. Imported profiles use **Save to Mouse** to apply edits. Their software remapping stays paused because custom firmware assignments can produce identical events from different physical controls. This restriction survives export, duplication and restart.
+
+The scroll sensitivity sliders are in **Sensitivity**. Vertical wheel and horizontal scrolling, including wheel tilt and assigned scroll actions, have separate multipliers. **Reset** returns both to 1×. These settings stay on the Mac and require OpenNaga running with remapping enabled; they are not written to mouse memory. Trackpad and momentum scrolling are left unchanged.
 
 ## Assign system controls
 
@@ -157,7 +166,7 @@ open -n OpenNaga.app --args --inspect-onboard --diagnose-file /tmp/naga-onboard.
 open -n OpenNaga.app --args --save-onboard-profile --diagnose-file /tmp/naga-save.json      # saves the selected profile
 open -n OpenNaga.app --args --restore-onboard-profile --diagnose-file /tmp/naga-restore.json
 ```
- See [the verification record](Documentation/verification-2026-09-08.md) for tested flows and remaining device checks.
+See [the latest verification record](Documentation/verification-2026-10-12.md) for the issue audit, tested flows and remaining device checks. The [original verification record](Documentation/verification-2026-09-08.md) covers the earlier release.
 
 ## How input handling works
 

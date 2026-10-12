@@ -28,12 +28,13 @@ enum OnboardProfileStore {
             throw RazerHardwareError.malformed("Incomplete mouse backup.")
         }
         var ids = Set<UInt8>()
+        var original: [[UInt8]] = []
         for bytes in state.original {
             guard bytes.count == 10 else { throw RazerHardwareError.malformed("Invalid mouse backup.") }
-            _ = try RazerOnboardBinding(bytes: bytes, profile: 1, buttonID: bytes[1])
+            original.append(try RazerOnboardBinding(bytes: bytes, profile: 1, buttonID: bytes[1]).bytes)
             guard ids.insert(bytes[1]).inserted else { throw RazerHardwareError.malformed("Duplicate button in the backup.") }
         }
-        return state
+        return State(identity: state.identity, original: original, name: state.name, pending: state.pending)
     }
 
     static func save(_ plan: OnboardProfilePlan, session: RazerHardwareSession, identity: String, at url: URL = url) throws {
@@ -106,16 +107,19 @@ enum OnboardProfileStore {
 
     static func write(_ bytes: [UInt8], session: RazerHardwareSession) throws {
         guard bytes.count == 10 else { throw RazerHardwareError.invalidValue("Invalid assignment to write.") }
-        _ = try RazerOnboardBinding(bytes: bytes, profile: 1, buttonID: bytes[1])
-        let command = RazerCommand(transaction: 0x1f, commandClass: 2, id: 0x0c, arguments: bytes)
+        // Normalized: always targets the normal layer.
+        let binding = try RazerOnboardBinding(bytes: bytes, profile: 1, buttonID: bytes[1])
+        let command = RazerCommand(transaction: 0x1f, commandClass: 2, id: 0x0c, arguments: binding.bytes)
         _ = try session.execute(command)
-        try verify(bytes, profile: 1, session: session)
+        try verify(binding.bytes, profile: 1, session: session)
     }
 
     private static func verify(_ bytes: [UInt8], profile: UInt8, session: RazerHardwareSession) throws {
         var expected = bytes
         expected[0] = profile
         let actual = try session.execute(RazerOnboardBindings.readCommand(profile: profile, buttonID: bytes[1]))
-        guard actual == expected else { throw RazerHardwareError.readback }
+        // Compare as normalized bindings: reply byte 2 is a status, not the layer.
+        guard let binding = try? RazerOnboardBinding(bytes: actual, profile: profile, buttonID: bytes[1]),
+              binding.bytes == expected else { throw RazerHardwareError.readback }
     }
 }

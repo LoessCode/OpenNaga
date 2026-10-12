@@ -95,6 +95,7 @@ enum InputEngineTests {
 
         var events: [CGEvent] = []
         let mapper = ButtonMapper(eventSink: { events.append($0) })
+        mapper.modifierKeyState = { _ in false }
         mapper.frontmostBundleIdentifier = { "com.apple.TextEdit" }
         mapper.updateMapping([1: .mouse(action: .button4, description: nil), 2: .disabled])
         mapper.handlePress(buttonIndex: 1)
@@ -217,6 +218,7 @@ enum InputEngineTests {
         try check(KeyboardKeyGroup.allCases.allSatisfy { group in catalog.contains { $0.group == group } }, "Every key group is populated")
         var selectedKeyEvents: [CGEvent] = []
         let selectedKeyMapper = ButtonMapper(eventSink: { selectedKeyEvents.append($0) })
+        selectedKeyMapper.modifierKeyState = { _ in false }
         for entry in catalog {
             selectedKeyEvents.removeAll()
             let stroke = entry.stroke(modifiers: ["cmd", "shift"])

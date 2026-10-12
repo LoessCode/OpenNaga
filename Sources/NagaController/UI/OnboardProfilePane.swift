@@ -31,12 +31,17 @@ struct OnboardProfilePane: View {
             if !device.isConnected { Text("Connect the USB receiver and switch the mouse to 2.4 GHz mode.").font(.callout) }
             Text("Saving keeps a backup and pauses software remapping. Key repeat and long presses follow the mouse's own behavior. Restoring needs the same receiver.")
                 .font(.caption).foregroundStyle(.secondary)
+            Text("Imported profiles keep software remapping paused. Edit their assignments here, then use Save to Mouse.")
+                .font(.caption).foregroundStyle(.secondary)
             Text(device.statusMessage).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
             Divider()
             HStack {
                 Button("Restore Previous Assignments") { device.restoreOnboard() }
                     .disabled(!model.onboardActive || !device.isConnected || device.isBusy)
                 Spacer()
+                Button("Import from Mouse") { device.importOnboard() }
+                    .disabled(!device.isConnected || device.isBusy)
+                    .help("Create a profile for editing and saving to the mouse. Imported profiles keep software remapping paused.")
                 Button("Refresh") { device.refresh() }.disabled(device.isBusy)
             }
             HStack {

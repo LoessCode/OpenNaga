@@ -62,6 +62,38 @@ struct RazerCommand: Equatable {
 
 enum RazerReportCodec {
     static let length = 90
+    static func finishResponse(_ initial: [UInt8], for request: [UInt8],
+                               pause: (TimeInterval) -> Void = Thread.sleep(forTimeInterval:),
+                               read: () throws -> [UInt8]) throws -> [UInt8] {
+        var response = initial
+        let deadline = ProcessInfo.processInfo.systemUptime + 0.5
+        for _ in 0..<20 {
+            guard needsResponsePoll(response, for: request) else { return response }
+            guard ProcessInfo.processInfo.systemUptime < deadline else { break }
+            pause(0.025)
+            response = try read()
+        }
+        guard !needsResponsePoll(response, for: request) else {
+            throw RazerHardwareError.transport("The mouse response did not finish. No command was resent. Wake the mouse and try again.")
+        }
+        return response
+    }
+
+    // A receiver can expose a busy or previous command's valid reply while a
+    // flash operation finishes. Poll GET_REPORT again without repeating SET.
+    static func needsResponsePoll(_ bytes: [UInt8], for request: [UInt8]) -> Bool {
+        guard bytes.count == length, request.count == length,
+              bytes[88] == checksum(bytes), bytes[5] <= 80,
+              [UInt8(1), 2, 3, 4, 5].contains(bytes[0]),
+              [2, 3, 4, 89].allSatisfy({ bytes[$0] == 0 }) else { return false }
+        if bytes[1] != request[1] || bytes[6] != request[6] || bytes[7] != request[7] { return true }
+        if bytes[0] == 1 { return true }
+        // Consecutive onboard reads share the command header. Their bank and
+        // control ID must match too; byte 2 of the assignment is reply metadata.
+        return bytes[0] == 2 && request[6] == 2 && request[7] == 0x8c && bytes[5] == 10
+            && (bytes[8] != request[8] || bytes[9] != request[9])
+    }
+
     static func checksum(_ bytes: [UInt8]) -> UInt8 {
         bytes[2..<88].reduce(0, ^)
     }
