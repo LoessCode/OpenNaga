@@ -59,6 +59,8 @@ Later, the connected receiver returned status 4 for every telemetry request whil
 - Clicked the empty right edge of the Sensitivity sidebar row and verified page selection.
 - Verified regular activation policy with a visible settings window, accessory policy after closing, and regular/active state after reopening.
 - Installed `/Applications/OpenNaga.app`, signed with the local `NagaController Dev` identity. The user granted Accessibility and Input Monitoring. This is a local development signature, not Developer ID notarization.
+- Used **Import from Mouse** in the installed app against the live receiver. It created and selected **From Mouse** with all 19 supported editable controls and persisted `onboardOnly: true`; the UI confirmed that software remapping remains paused. No unsupported assignments were reported on this mouse.
+- Repeated the full hardware roundtrip after adding response polling: DPI/poll writes, temporary onboard save, all 21 active/stored restorations and the journaled driver-mode toggle/restore all passed.
 
 ## Physical input coverage
 

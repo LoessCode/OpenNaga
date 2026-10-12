@@ -58,7 +58,7 @@ open -n OpenNaga.app --args --inspect-onboard --diagnose-file /tmp/o.json   # re
 
 ## Installed copy
 
-On 2026-10-12 neither app nor either data folder existed on this Mac. Installed the audited source build as `/Applications/OpenNaga.app`, signed with the newly created local `NagaController Dev` identity. The user granted Accessibility and Input Monitoring. The bundle ID is unchanged; the app is not notarized. Keep only this installed copy, and quit it before replacing its bundle. Temporary audit fixtures and captures live under `.build/audit` and `/tmp/opennaga-*`; any pending test backup must be restored before further mouse writes.
+On 2026-10-12 neither app nor either data folder existed on this Mac. Installed the audited source build as `/Applications/OpenNaga.app`, signed with the newly created local `NagaController Dev` identity. The user granted Accessibility and Input Monitoring. Imported the live mouse's 19 editable assignments into the selected local `From Mouse` profile, retaining its `onboardOnly` protection. Hardware assignments and settings were restored after testing; no recovery journal remains. The bundle ID is unchanged; the app is not notarized. Keep only this installed copy, and quit it before replacing its bundle. Temporary audit fixtures and captures live under `.build/audit` and `/tmp/opennaga-*`; any pending test backup must be restored before further mouse writes.
 
 ## Preferences and constraints
 
