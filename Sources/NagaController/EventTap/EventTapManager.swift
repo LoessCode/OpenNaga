@@ -159,7 +159,8 @@ final class EventTapManager {
             }
             manager.activeDownButtons.insert(button)
             if type == .keyDown { manager.repeatOwnership.claim(button: button, signature: signature) }
-            ButtonMapper.shared.handlePress(buttonIndex: button)
+            // The trigger's flags hold the modifiers the user is pressing now.
+            ButtonMapper.shared.handlePress(buttonIndex: button, inputFlags: event.flags)
             return nil
         }
         guard manager.activeDownButtons.remove(button) != nil else { return Unmanaged.passUnretained(event) }
@@ -181,7 +182,7 @@ final class EventTapManager {
         if let button = match.horizontalButton, ButtonMapper.shared.hasMapping(buttonIndex: button) {
             suppressHorizontal = true
             if !HIDListener.shared.usesRawTiltDecoding && !HIDListener.shared.isRawControlHeld(button) {
-                ButtonMapper.shared.handle(buttonIndex: button)
+                ButtonMapper.shared.handle(buttonIndex: button, inputFlags: event.flags)
             }
         }
         scrollScaler.apply(to: event, sensitivity: ConfigManager.shared.scrollSensitivity,

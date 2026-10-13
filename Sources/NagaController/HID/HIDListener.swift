@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import IOKit.hid
 import Darwin
 
@@ -219,7 +220,9 @@ final class HIDListener {
                 self.lastInputDescription = "Button \(button): recognized driver report"
                 NotificationCenter.default.post(name: Notification.Name("NagaButtonActivity"), object: self, userInfo: ["buttonIndex": button])
                 if EventTapManager.shared.isRunning && EventTapManager.shared.isRemappingEnabled {
-                    ButtonMapper.shared.handlePress(buttonIndex: button)
+                    // Driver reports carry no event flags, so sample the
+                    // modifiers the user is holding when the press arrives.
+                    ButtonMapper.shared.handlePress(buttonIndex: button, inputFlags: CGEventSource.flagsState(.combinedSessionState))
                 }
             }
         }

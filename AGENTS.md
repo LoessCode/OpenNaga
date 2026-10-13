@@ -25,7 +25,7 @@ Naming: the shipped app is `OpenNaga.app` (executable `OpenNaga`, display name O
 swift build                      # debug
 bash Scripts/make_dev_certificate.sh   # once: self-signed "NagaController Dev" identity, keeps TCC grants across rebuilds
 bash Scripts/build_app.sh        # release bundle ./OpenNaga.app, signed with the dev identity if present, else ad-hoc
-bash Scripts/test.sh             # 1009 dependency-free checks, including async modifier/macro checks
+bash Scripts/test.sh             # 1020 dependency-free checks, including async modifier/macro checks
 bash Scripts/make_dmg.sh         # ad-hoc signed release DMG (OpenNaga-v<version>.dmg, git-ignored)
 gh release create vX.Y.Z OpenNaga-vX.Y.Z.dmg --title "OpenNaga X.Y.Z" --notes-file <file>   # publish
 open OpenNaga.app --args --diagnose-file /tmp/naga.json   # read-only hardware probe
@@ -48,6 +48,7 @@ open -n OpenNaga.app --args --inspect-onboard --diagnose-file /tmp/o.json   # re
 
 ## Recent changes
 
+- 2026-10-13 (#6 follow-up): modifiers the user holds while pressing a mapped control now combine with the mapped output (Command + side button mapped to C sends Command-C; keypad mappings too). The tap passes the triggering event's flags to `ButtonMapper.handlePress(buttonIndex:inputFlags:)`; driver-mode reports sample `CGEventSource.flagsState(.combinedSessionState)`. Modifiers OpenNaga holds itself, or released less than 50 ms earlier, are excluded so a synthetic Command cannot leak into the next press. Keypad keys now carry `maskNumericPad` like hardware events. 1020 checks; physical confirmation with Keyboard Maestro is pending.
 - 2.5.0 (2026-10-12): package the audited fixes and new scroll/import features, bump the bundle to build 9, update the download instructions and document validation limits. Public DMGs use ad-hoc signing; the installed copy keeps the local development identity so TCC permissions remain stable.
 - 2026-10-12: audited open issues #6/#7 and PRs #1 through #5. The automated modifier fix did not compile, and the scroll commit only added an unused helper. Fixed modifier API/state ownership, overlapping holds and macros; completed scroll settings, HID correlation and event scaling. Integrated USB callback timeout units, normal-layer reply normalization, safe mouse import, full sidebar hit areas and temporary Dock/Command-Tab presence. Added bounded GET_REPORT-only polling for valid busy/stale replies; uncertain writes are not resent on polling exhaustion. `.github/workflows/validate.yml` builds and runs the dependency-free suite on pushes and PRs. The external issue bot is not configured in this repository.
 - 2026-10-12 validation: USB receiver `1532:00b4` read DPI 1600x1600, polling 1000 Hz, battery 93%, normal mode and all 21 stored/active bindings. Explicit same-value DPI/poll writes, a temporary F20 onboard save/restore and the production journaled driver-mode toggle/shutdown restore passed. All 21 original assignments and settings were restored. Six live synthetic shortcut combinations reached macOS with balanced modifiers. Light/dark minimum-size UI, blank sidebar-row clicks, close/reopen and activation-policy changes checked. See `Documentation/verification-2026-10-12.md` for evidence and limits; do not infer per-button or Bluetooth coverage from USB readback.

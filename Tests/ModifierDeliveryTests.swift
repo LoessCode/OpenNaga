@@ -147,6 +147,76 @@ enum ModifierDeliveryTests {
         mapper.updateMapping([:])
         try await Task.sleep(nanoseconds: 50_000_000)
         try check(events.isEmpty, "Changing mappings cancels delayed macro steps before modifier injection")
+        // Modifiers the user holds on the triggering input combine with the
+        // mapped key even when no physical modifier edge was observed.
+        let commandHeld = CGEventFlags(rawValue: CGEventFlags.maskCommand.rawValue | 0x08)
+        func heldInputMapper(_ mapping: [Int: ActionType]) -> (ButtonMapper, () -> [CGEvent], (TimeInterval) -> Void) {
+            var captured: [CGEvent] = []
+            var clock: TimeInterval = 100
+            let mapper = ButtonMapper(eventSink: { captured.append($0) })
+            mapper.modifierKeyState = { _ in false }
+            mapper.uptime = { clock }
+            mapper.updateMapping(mapping)
+            return (mapper, { captured }, { clock = $0 })
+        }
+        do {
+            let (mapper, events, _) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: [])], description: nil)])
+            mapper.handlePress(buttonIndex: 1, inputFlags: commandHeld)
+            try check(events().map(\.type) == [.keyDown] && events()[0].flags.contains(.maskCommand),
+                      "Held Command combines with a side button mapped to C")
+            try check(events()[0].flags.rawValue & 0x08 != 0, "Held Command keeps its left/right device bit")
+            mapper.handleRelease(buttonIndex: 1)
+            try check(events().map(\.type) == [.keyDown, .keyUp] && events()[1].flags.contains(.maskCommand),
+                      "The key release matches the combined key press")
+        }
+        do {
+            let (mapper, events, _) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"])], description: nil)])
+            mapper.handle(buttonIndex: 1, inputFlags: commandHeld)
+            try check(events().map(\.type) == [.keyDown, .keyUp] && events().allSatisfy { $0.flags.contains(.maskCommand) },
+                      "A held Command the mapping also needs is borrowed, not pressed again")
+        }
+        do {
+            let (mapper, events, _) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "v", modifiers: ["shift"])], description: nil)])
+            mapper.handle(buttonIndex: 1, inputFlags: commandHeld)
+            let keys = events().filter { $0.type == .keyDown || $0.type == .keyUp }
+            try check(keys.count == 2 && keys.allSatisfy { $0.flags.contains([.maskCommand, .maskShift]) },
+                      "Held modifiers combine with the mapping's own modifiers")
+            try check(events().filter { $0.type == .flagsChanged }.count == 2 && events().last?.flags == [],
+                      "Only the mapping's own modifier gets synthetic edges")
+        }
+        do {
+            let (mapper, events, _) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "kp1", modifiers: [])], description: nil)])
+            mapper.handle(buttonIndex: 1, inputFlags: commandHeld)
+            try check(events().count == 2 && events().allSatisfy {
+                $0.getIntegerValueField(.keyboardEventKeycode) == kVK_ANSI_Keypad1 && $0.flags.contains([.maskCommand, .maskNumericPad])
+            }, "Held Command combines with a keypad mapping, which keeps the numeric pad flag")
+        }
+        do {
+            let (mapper, events, _) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "a", modifiers: []), KeyStroke(key: "b", modifiers: [])], description: nil)])
+            mapper.handle(buttonIndex: 1, inputFlags: [.maskShift])
+            try check(events().count == 4 && events().allSatisfy { $0.flags.contains(.maskShift) },
+                      "Held modifiers apply to every key of a sequence")
+            mapper.handle(buttonIndex: 1)
+            try check(events().count == 8 && events().dropFirst(4).allSatisfy { !$0.flags.contains(.maskShift) },
+                      "A press without held modifiers sends plain keys")
+        }
+        do {
+            let (mapper, events, setClock) = heldInputMapper([
+                1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"])], description: nil),
+                2: .keySequence(keys: [KeyStroke(key: "v", modifiers: [])], description: nil)
+            ])
+            mapper.handle(buttonIndex: 1)
+            setClock(100.01)
+            let before = events().count
+            mapper.handle(buttonIndex: 2, inputFlags: commandHeld)
+            try check(events().dropFirst(before).allSatisfy { !$0.flags.contains(.maskCommand) },
+                      "A trigger that predates the release of a synthetic Command does not inherit it")
+            setClock(101)
+            let later = events().count
+            mapper.handle(buttonIndex: 2, inputFlags: commandHeld)
+            try check(events().count == later + 2 && events().dropFirst(later).allSatisfy { $0.flags.contains(.maskCommand) },
+                      "A physical Command pressed after the synthetic release combines again")
+        }
         return count
     }
 }
