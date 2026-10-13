@@ -14,7 +14,7 @@ OpenNaga is an independent project, not affiliated with or endorsed by Razer. It
 - Adaptive macOS settings window with a restrained green accent and three sections: Buttons, Sensitivity, Status
 - Interactive mouse photographs with side-button highlights, a top view and a matching assignment grid for all 19 logical controls
 - Actions per button: keyboard keys selected by category or recorded, with optional modifiers, multi-step key sequence, mouse action (browser back/forward, real mouse buttons 4/5, middle/left/right click, scroll), launch application, shell command, macro, profile switch, disabled, or original passthrough
-- While software remapping is enabled, held keyboard modifiers combine with mapped buttons: Command plus a side button mapped to C sends Command-C. This also applies to keypad keys, key sequences and shortcuts.
+- Held keyboard modifiers combine with the mouse's keys: Command plus a side button that sends C produces Command-C. This applies to remapped buttons, unmapped buttons and profiles saved to mouse memory, including keypad keys, key sequences and shortcuts. macOS does not apply modifiers held on one keyboard to keys from another device, so OpenNaga re-sends such mouse keys with the held modifiers while it is running with remapping enabled.
 - System editor with 25 actions for audio, playback, brightness, screenshots, windows, spaces and macOS tools, with a preview button
 - Existing text snippets remain saved and can be replaced through the Keys editor
 - Save a profile to the mouse's onboard memory: it keeps working after you quit OpenNaga, on another computer and over Bluetooth
@@ -59,7 +59,7 @@ The Naga V2 HyperSpeed stores one button profile in its own memory. OpenNaga can
 2. Select the profile in the settings window and click **Save to Mouse…** next to the profile menu.
 3. Click **Save to Mouse**. If a button uses an action the mouse cannot store, the window names it and saving stays disabled.
 
-After saving, the mouse sends the assigned keys by itself, so the profile keeps working after you quit OpenNaga, over Bluetooth, and on computers without the app. Software remapping pauses while a saved profile is active, so the new buttons are not remapped twice. Editing assignments or switching profiles does not change the mouse until you save again.
+After saving, the mouse sends the assigned keys by itself, so the profile keeps working after you quit OpenNaga, over Bluetooth, and on computers without the app. Software remapping pauses while a saved profile is active, so the new buttons are not remapped twice. While OpenNaga runs, it still adds modifiers held on your keyboard to the keys the mouse sends, so Command plus a button saved as C gives Command-C. Without the app, macOS delivers the mouse's keys without those modifiers. Editing assignments or switching profiles does not change the mouse until you save again.
 
 What the mouse can store:
 
@@ -160,6 +160,16 @@ open -n OpenNaga.app --args --snapshot /tmp/ui.png --snapshot-appearance dark --
 
 Appearance, size and selected button are optional snapshot controls.
 
+Modifier trace, for reports about held modifiers not combining with mouse buttons:
+
+```bash
+defaults write com.zer0codestuff.NagaController ModifierTrace -bool true   # then quit and reopen OpenNaga
+cat ~/Library/Application\ Support/OpenNaga/modifier-trace.log
+defaults delete com.zer0codestuff.NagaController ModifierTrace            # turn it off again
+```
+
+The trace records modifier key changes, the flags of keys sent by the mouse and whether OpenNaga re-sent them. It does not record ordinary keyboard typing. The file is capped at about 1 MB.
+
 Onboard memory from the command line (quit the app first; each command writes a JSON report and exits):
 
 ```bash
@@ -174,6 +184,7 @@ See [the latest verification record](Documentation/verification-2026-10-12.md) f
 - `HIDListener` observes vendor `1532` devices whose product ID is `00b4` or whose name contains "naga", plus the exact Bluetooth identity `068e:00b5`, on a background run loop. It does not enumerate other products under the Bluetooth vendor ID.
 - Each physical press/release is recorded with its timestamp. `EventTapManager` consumes a matching system event only if it arrives within 25 ms of a recorded HID edge, so regular keyboards are never blocked.
 - Synthetic events are tagged through `eventSourceUserData` and ignored by the tap.
+- macOS keeps modifier state per keyboard device, so keys from the mouse's keyboard interface never carry modifiers held on another keyboard. Every key usage from that interface is recorded, and when a matching key event lacks a held modifier, the tap drops it and re-sends the key through the synthetic source with the modifiers merged. Its auto-repeats and key-up follow the same path. The tap stays blocking for this while a mouse-memory profile pauses remapping; it never remaps keys there.
 - Held buttons are released on stop, disconnect, profile change, or when the tap is disabled by the system.
 - Buttons 13 to 16 (DPI, wheel tilt) rely on documented driver-mode reports and are only reported when a matching report is observed.
 

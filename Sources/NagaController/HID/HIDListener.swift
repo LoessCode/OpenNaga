@@ -16,6 +16,10 @@ final class HIDListener {
     private(set) var lastInputDescription = "No input detected. The DPI buttons require a recognized driver report."
     private let lock = NSLock()
     private var matcher = InputEdgeMatcher()
+    // Every key from the mouse's keyboard interface, keyed by HID usage, so
+    // native keys can receive modifiers held on another keyboard.
+    private var nativeKeyMatcher = InputEdgeMatcher()
+    private var nativeKeysHeld: Set<UInt32> = []
     private var scrollMatcher = ScrollInputMatcher()
     private var runLoop: CFRunLoop?
     private var thread: Thread?
@@ -98,7 +102,20 @@ final class HIDListener {
     }
 
     func resetCorrelation() {
-        lock.lock(); matcher.reset(); scrollMatcher.reset(); lock.unlock()
+        lock.lock(); matcher.reset(); scrollMatcher.reset(); nativeKeyMatcher.reset(); lock.unlock()
+    }
+
+    /// Consumes a mouse key edge for any HID usage that produces `keyCode`.
+    func consumeNativeKey(keyCode: CGKeyCode, down: Bool, timestamp: TimeInterval) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return HIDKeyboardUsage.usages(forKeyCode: keyCode).contains {
+            nativeKeyMatcher.consume(button: Int($0), down: down, timestamp: timestamp)
+        }
+    }
+
+    func isNativeKeyHeld(keyCode: CGKeyCode) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return HIDKeyboardUsage.usages(forKeyCode: keyCode).contains { nativeKeysHeld.contains($0) }
     }
 
     func consume(buttonIndex: Int, down: Bool, timestamp: TimeInterval) -> Bool {
@@ -129,7 +146,7 @@ final class HIDListener {
 
     private func disconnected(_ device: IOHIDDevice) {
         guard devices.removeValue(forKey: identity(device)) != nil else { return }
-        lock.lock(); rawState.reset(); heldButtons.removeAll(); lock.unlock()
+        lock.lock(); rawState.reset(); heldButtons.removeAll(); nativeKeysHeld.removeAll(); lock.unlock()
         valueStates.removeAll(); resetCorrelation()
         let remaining = devices.values.first
         publish {
@@ -153,6 +170,17 @@ final class HIDListener {
             scrollMatcher.record(axis: axis, button: tiltButton, timestamp: timestamp)
             lock.unlock()
             if axis == .vertical { return }
+        }
+        if page == 0x07, HIDKeyboardUsage.keyCode(forUsage: usage) != nil {
+            let down = integer != 0
+            let nativeKey = "\(identity(device))-native-\(usage)"
+            if valueStates[nativeKey, default: false] != down {
+                valueStates[nativeKey] = down
+                lock.lock()
+                nativeKeyMatcher.record(button: Int(usage), down: down, timestamp: timestamp)
+                if down { nativeKeysHeld.insert(usage) } else { nativeKeysHeld.remove(usage) }
+                lock.unlock()
+            }
         }
         let rawTilt = usesRawTiltDecoding &&
             (IOHIDDeviceGetProperty(device, kIOHIDProductIDKey as CFString) as? Int) == 0x00b4 &&

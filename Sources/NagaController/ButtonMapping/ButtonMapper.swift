@@ -257,6 +257,27 @@ final class ButtonMapper {
         }
     }
 
+    /// Held keyboard modifiers missing from a key event the mouse sent
+    /// natively. Modifiers owned by an active mapping are not reported.
+    func heldModifiersMissing(from flags: CGEventFlags) -> CGEventFlags {
+        let physical = physicalModifierFlags()
+        var missing = CGEventFlags()
+        for modifier in Self.modifierKeys where physical.contains(modifier.flag)
+            && !flags.contains(modifier.flag) && !syntheticModifiers.contains(modifier.flag) {
+            missing.formUnion(modifier.flag)
+            missing.formUnion(CGEventFlags(rawValue: physical.rawValue & (modifier.deviceMask | modifier.otherDeviceMask)))
+        }
+        return missing
+    }
+
+    /// Re-sends a native mouse key through the synthetic keyboard source with
+    /// the modifiers currently held, as a remapped key would be delivered.
+    func postNativeKey(_ code: CGKeyCode, flags: CGEventFlags, down: Bool, autorepeat: Bool = false) {
+        postKey(code, flags: flags, down: down, autorepeat: autorepeat)
+    }
+
+    var observedModifierFlags: CGEventFlags { physicalModifierFlags() }
+
     private func physicalModifierFlags() -> CGEventFlags {
         var flags = CGEventFlags()
         for modifier in Self.modifierKeys {

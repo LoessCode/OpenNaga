@@ -13,6 +13,11 @@ final class EventTapManager {
     private var activeDownButtons: Set<Int> = []
     private var repeatOwnership = InputRepeatOwnership()
     private let scrollScaler = ScrollEventScaler()
+    private var nativeKeys = NativeKeyRouting()
+    private var traceEnabled = false
+    /// The tap can re-send native mouse keys with held keyboard modifiers.
+    /// This also applies while a mouse-memory profile pauses remapping.
+    private(set) var mergesNativeModifiers = false
 
     private(set) var isListeningOnly: Bool = true
     var isRemappingEnabled: Bool {
@@ -30,13 +35,19 @@ final class EventTapManager {
     func start(listenOnly: Bool) {
         stop()
         ButtonMapper.shared.resetPhysicalModifierObservation()
-        let listenOnly = listenOnly || OnboardProfileStore.isActive || ConfigManager.shared.currentProfileIsOnboardOnly
-        isListeningOnly = listenOnly
+        let onboard = OnboardProfileStore.isActive || ConfigManager.shared.currentProfileIsOnboardOnly
+        let mergeOnly = listenOnly && onboard && ConfigManager.shared.getRemappingEnabled()
+        let remapListenOnly = listenOnly || onboard
+        isListeningOnly = remapListenOnly
+        mergesNativeModifiers = !remapListenOnly || mergeOnly
+        traceEnabled = ModifierTrace.isEnabled
+        // Only a tap that may modify events is created as a blocking tap.
+        let tapListenOnly = !mergesNativeModifiers
 
         let types: [CGEventType] = [.keyDown, .keyUp, .flagsChanged, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp, .scrollWheel, .mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
         let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
 
-        var options: CGEventTapOptions = listenOnly ? .listenOnly : .defaultTap
+        var options: CGEventTapOptions = tapListenOnly ? .listenOnly : .defaultTap
 
         var tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -46,7 +57,7 @@ final class EventTapManager {
             callback: EventTapManager.eventCallback,
             userInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         )
-        if tap == nil && !listenOnly {
+        if tap == nil && !tapListenOnly {
             NSLog("[EventTap] Failed to create blocking event tap; falling back to listen-only. Enable Input Monitoring in System Settings.")
             options = .listenOnly
             tap = CGEvent.tapCreate(
@@ -58,10 +69,11 @@ final class EventTapManager {
                 userInfo: UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
             )
             isListeningOnly = true
-
+            mergesNativeModifiers = false
         }
         guard let tap = tap else {
             isListeningOnly = true
+            mergesNativeModifiers = false
             notify()
             NSLog("[EventTap] Failed to create event tap. Check permissions.")
             return
@@ -75,7 +87,8 @@ final class EventTapManager {
             CGEvent.tapEnable(tap: tap, enable: true)
             isRunning = true
             notify()
-            NSLog("[EventTap] Started (listenOnly=\(listenOnly)).")
+            NSLog("[EventTap] Started (listenOnly=\(options == .listenOnly), remapping=\(!isListeningOnly), nativeModifiers=\(mergesNativeModifiers)).")
+            if traceEnabled { ModifierTrace.log("tap started remapping=\(!isListeningOnly) nativeModifiers=\(mergesNativeModifiers) onboard=\(onboard)") }
         }
     }
 
@@ -97,6 +110,7 @@ final class EventTapManager {
         activeDownButtons.removeAll()
         repeatOwnership.reset()
         scrollScaler.reset()
+        for code in nativeKeys.reset() { ButtonMapper.shared.postNativeKey(code, flags: [], down: false) }
         ButtonMapper.shared.releaseAll()
         HIDListener.shared.resetCorrelation()
     }
@@ -115,6 +129,9 @@ final class EventTapManager {
         }
         if type == .flagsChanged {
             ButtonMapper.shared.observePhysicalModifier(event)
+            if manager.traceEnabled {
+                ModifierTrace.log("flagsChanged code=\(event.getIntegerValueField(.keyboardEventKeycode)) flags=\(ModifierTrace.hex(event.flags)) observed=\(ModifierTrace.hex(ButtonMapper.shared.observedModifierFlags))")
+            }
             return Unmanaged.passUnretained(event)
         }
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -122,7 +139,7 @@ final class EventTapManager {
             if let tap = manager.eventTap { CGEvent.tapEnable(tap: tap, enable: true) }
             return Unmanaged.passUnretained(event)
         }
-        guard manager.isRemappingEnabled else { return Unmanaged.passUnretained(event) }
+        guard manager.isRemappingEnabled else { return manager.passKey(event, type) }
         if type == .scrollWheel { return manager.handleScroll(event) }
         if [.mouseMoved, .leftMouseDragged, .rightMouseDragged, .otherMouseDragged].contains(type),
            let drag = ButtonMapper.shared.dragEvent(for: event) {
@@ -137,7 +154,7 @@ final class EventTapManager {
             down = type == .keyDown
             if event.getIntegerValueField(.keyboardEventAutorepeat) != 0 {
                 if let button, manager.repeatOwnership.matches(button: button, signature: signature, physicallyHeld: HIDListener.shared.isPhysicallyHeld(button)) { return nil }
-                return Unmanaged.passUnretained(event)
+                return manager.passKey(event, type)
             }
         case .leftMouseDown, .leftMouseUp: button = 18; down = type == .leftMouseDown
         case .rightMouseDown, .rightMouseUp: button = 19; down = type == .rightMouseDown
@@ -147,13 +164,13 @@ final class EventTapManager {
             down = type == .otherMouseDown
         default: return Unmanaged.passUnretained(event)
         }
-        guard let button else { return Unmanaged.passUnretained(event) }
+        guard let button else { return manager.passKey(event, type) }
         guard HIDListener.shared.consume(buttonIndex: button, down: down, timestamp: Double(event.timestamp) / 1_000_000_000) else {
             if type == .keyDown || type == .keyUp { manager.repeatOwnership.invalidate(button: button) }
-            return Unmanaged.passUnretained(event)
+            return manager.passKey(event, type)
         }
         if down {
-            guard ButtonMapper.shared.hasMapping(buttonIndex: button) else { return Unmanaged.passUnretained(event) }
+            guard ButtonMapper.shared.hasMapping(buttonIndex: button) else { return manager.passKey(event, type) }
             if HIDListener.shared.usesRawTiltDecoding && (15...16).contains(button) {
                 manager.activeDownButtons.insert(button)
                 return nil // Raw reports alone execute tilt actions in driver mode.
@@ -161,12 +178,35 @@ final class EventTapManager {
             manager.activeDownButtons.insert(button)
             if type == .keyDown { manager.repeatOwnership.claim(button: button, signature: signature) }
             // The trigger's flags hold the modifiers the user is pressing now.
+            if manager.traceEnabled, type == .keyDown {
+                ModifierTrace.log("mapped button=\(button) down flags=\(ModifierTrace.hex(event.flags)) observed=\(ModifierTrace.hex(ButtonMapper.shared.observedModifierFlags))")
+            }
             ButtonMapper.shared.handlePress(buttonIndex: button, inputFlags: event.flags)
             return nil
         }
-        guard manager.activeDownButtons.remove(button) != nil else { return Unmanaged.passUnretained(event) }
+        guard manager.activeDownButtons.remove(button) != nil else { return manager.passKey(event, type) }
         manager.repeatOwnership.invalidate(button: button)
         ButtonMapper.shared.handleRelease(buttonIndex: button, inputFlags: event.flags)
+        return nil
+    }
+
+    /// Passes a key event that no mapping consumed. A key the mouse sent
+    /// natively is re-sent when keyboard modifiers it lacks are held.
+    private func passKey(_ event: CGEvent, _ type: CGEventType) -> Unmanaged<CGEvent>? {
+        guard mergesNativeModifiers, type == .keyDown || type == .keyUp else { return Unmanaged.passUnretained(event) }
+        let code = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        let down = type == .keyDown
+        let autorepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+        let fromMouse = !autorepeat && HIDListener.shared.consumeNativeKey(keyCode: code, down: down, timestamp: Double(event.timestamp) / 1_000_000_000)
+        let missing = fromMouse || autorepeat ? ButtonMapper.shared.heldModifiersMissing(from: event.flags) : []
+        let decision = nativeKeys.decide(keyCode: code, down: down, autorepeat: autorepeat, fromMouse: fromMouse,
+                                         mouseHolds: HIDListener.shared.isNativeKeyHeld(keyCode: code), missingModifiers: missing)
+        if traceEnabled, fromMouse {
+            ModifierTrace.log("native key=\(code) \(down ? "down" : "up") flags=\(ModifierTrace.hex(event.flags)) observed=\(ModifierTrace.hex(ButtonMapper.shared.observedModifierFlags)) missing=\(ModifierTrace.hex(missing)) decision=\(decision)")
+        }
+        guard decision == .reroute else { return Unmanaged.passUnretained(event) }
+        let deviceIndependent = CGEventFlags(rawValue: 0xffff0000)
+        ButtonMapper.shared.postNativeKey(code, flags: event.flags.intersection(deviceIndependent).union(missing), down: down, autorepeat: autorepeat)
         return nil
     }
 

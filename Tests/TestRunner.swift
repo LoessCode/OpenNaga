@@ -10,6 +10,8 @@ struct TestRunner {
             print("System actions: \(system) checks passed")
             let modifiers = try await ModifierDeliveryTests.run()
             print("Modifier delivery: \(modifiers) checks passed")
+            let native = try NativeKeyRoutingTests.run()
+            print("Native key modifiers: \(native) checks passed")
             let scroll = try ScrollSensitivityTests.run()
             print("Scroll sensitivity: \(scroll) checks passed")
             let hardware = try HardwareProtocolTests.run()
@@ -20,7 +22,7 @@ struct TestRunner {
             print("Data folder: \(storage) checks passed")
             let imported = try ImportedProfileTests.run()
             print("Imported profiles: \(imported) checks passed")
-            print("PASS: \(core + system + modifiers + scroll + hardware + onboard + storage + imported) checks")
+            print("PASS: \(core + system + modifiers + native + scroll + hardware + onboard + storage + imported) checks")
         } catch {
             fputs("FAIL: \(error)\n", stderr)
             exit(1)
