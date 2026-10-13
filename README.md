@@ -14,6 +14,7 @@ OpenNaga is an independent project, not affiliated with or endorsed by Razer. It
 - Adaptive macOS settings window with a restrained green accent and three sections: Buttons, Sensitivity, Status
 - Interactive mouse photographs with side-button highlights, a top view and a matching assignment grid for all 19 logical controls
 - Actions per button: keyboard keys selected by category or recorded, with optional modifiers, multi-step key sequence, mouse action (browser back/forward, real mouse buttons 4/5, middle/left/right click, scroll), launch application, shell command, macro, profile switch, disabled, or original passthrough
+- Held keyboard modifiers combine with mapped buttons: Command plus a side button mapped to C sends Command-C. This also applies to keypad keys, key sequences and shortcuts.
 - System editor with 25 actions for audio, playback, brightness, screenshots, windows, spaces and macOS tools, with a preview button
 - Existing text snippets remain saved and can be replaced through the Keys editor
 - Save a profile to the mouse's onboard memory: it keeps working after you quit OpenNaga, on another computer and over Bluetooth
