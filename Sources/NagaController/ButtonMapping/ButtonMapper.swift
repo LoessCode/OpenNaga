@@ -6,9 +6,7 @@ final class ButtonMapper {
 
     static let syntheticMarker: Int64 = 0x4e4147414354524c
     private var mapping: [Int: ActionType] = [:]
-    // A key hold remembers the modifiers it needs itself and the ones the
-    // user was holding on the triggering input, which ride on its key edges.
-    private enum Hold { case key(CGKeyCode, CGEventFlags, held: CGEventFlags), mouse(CGMouseButton) }
+    private enum Hold { case key(CGKeyCode, CGEventFlags), mouse(CGMouseButton) }
     private var activeHolds: [Int: Hold] = [:]
     private var pressed: Set<Int> = []
     private var generation = 0
@@ -24,12 +22,8 @@ final class ButtonMapper {
     private var physicalModifierStates: [CGKeyCode: Bool] = [:]
     // Modifiers the user holds on the input currently being performed.
     private var inputModifiers: CGEventFlags = []
-    // When each synthetic modifier was last released. An input event created
-    // before that release reached the system can still carry the old flag.
-    private var syntheticReleaseTimes: [UInt64: TimeInterval] = [:]
-    private static let syntheticReleaseGrace: TimeInterval = 0.05
+    private var pendingSyntheticReleases: [UInt64: CGEventTimestamp] = [:]
     var modifierKeyState: (CGKeyCode) -> Bool = { CGEventSource.keyState(.hidSystemState, key: $0) }
-    var uptime: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
 
     private struct ModifierKey {
         let flag: CGEventFlags
@@ -74,7 +68,7 @@ final class ButtonMapper {
 
     func handle(buttonIndex: Int, inputFlags: CGEventFlags = []) {
         handlePress(buttonIndex: buttonIndex, inputFlags: inputFlags)
-        handleRelease(buttonIndex: buttonIndex)
+        handleRelease(buttonIndex: buttonIndex, inputFlags: inputFlags)
     }
 
     /// `inputFlags` are the flags of the event that triggered the press. The
@@ -91,8 +85,8 @@ final class ButtonMapper {
             if let code = effectiveKeyCode(for: keys[0]) {
                 let flags = modifierFlags(from: keys[0].modifiers)
                 pressModifiers(flags)
-                let alreadyHeld = activeHolds.values.contains { if case .key(let heldCode, _, _) = $0 { return heldCode == code }; return false }
-                activeHolds[buttonIndex] = .key(code, flags, held: held)
+                let alreadyHeld = activeHolds.values.contains { if case .key(let heldCode, _) = $0 { return heldCode == code }; return false }
+                activeHolds[buttonIndex] = .key(code, flags)
                 if !alreadyHeld { postKey(code, flags: flags.union(held), down: true) }
             }
         case .mouse(let action, _):
@@ -106,13 +100,16 @@ final class ButtonMapper {
         }
     }
 
-    func handleRelease(buttonIndex: Int) {
+    func handleRelease(buttonIndex: Int, inputFlags: CGEventFlags? = nil) {
         pressed.remove(buttonIndex)
         guard let hold = activeHolds.removeValue(forKey: buttonIndex) else { return }
         // Do not release an output another physical input still holds.
         switch hold {
-        case .key(let code, let flags, let held):
-            if !activeHolds.values.contains(where: { if case .key(let c, _, _) = $0 { return c == code }; return false }) {
+        case .key(let code, let flags):
+            let held = inputFlags.map { userModifiers(in: $0) } ?? []
+            inputModifiers = held
+            defer { inputModifiers = [] }
+            if !activeHolds.values.contains(where: { if case .key(let c, _) = $0 { return c == code }; return false }) {
                 postKey(code, flags: flags.union(held), down: false)
             }
             releaseModifiers(flags)
@@ -190,23 +187,44 @@ final class ButtonMapper {
 
     private func postKey(_ code: CGKeyCode, flags: CGEventFlags, down: Bool, autorepeat: Bool = false) {
         let event = CGEvent(keyboardEventSource: keyboardSource, virtualKey: code, keyDown: down)
-        event?.flags = flags.union(syntheticModifiers).union(physicalModifierFlags()).union(Self.intrinsicFlags(for: code))
+        let intrinsicFlags = event?.flags.intersection(.maskNumericPad) ?? []
+        event?.flags = flags.union(syntheticModifiers).union(physicalModifierFlags()).union(intrinsicFlags)
         if autorepeat { event?.setIntegerValueField(.keyboardEventAutorepeat, value: 1) }
         post(event)
     }
 
     private func postModifier(_ flag: CGEventFlags, _ code: CGKeyCode, down: Bool) {
         syntheticModifiers = down ? syntheticModifiers.union(flag) : syntheticModifiers.subtracting(flag)
-        if down { syntheticReleaseTimes[flag.rawValue] = nil } else { syntheticReleaseTimes[flag.rawValue] = uptime() }
         let event = CGEvent(keyboardEventSource: keyboardSource, virtualKey: code, keyDown: down)
         event?.type = .flagsChanged
-        event?.flags = syntheticModifiers.union(physicalModifierFlags())
+        event?.flags = syntheticModifiers.union(physicalModifierFlags()).union(inputModifiers)
+        if down {
+            pendingSyntheticReleases[flag.rawValue] = nil
+        } else if let event {
+            pendingSyntheticReleases[flag.rawValue] = event.timestamp
+        }
         post(event)
+    }
+
+    /// Acknowledge the release when it reaches the downstream event tap. A
+    /// real modifier pressed in the meantime must survive the queued release.
+    func observeSyntheticModifier(_ event: CGEvent) {
+        guard event.type == .flagsChanged,
+              event.getIntegerValueField(.eventSourceUserData) == Self.syntheticMarker else { return }
+        let code = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
+        guard let modifier = Self.modifierKeys.first(where: { $0.code == code }),
+              pendingSyntheticReleases[modifier.flag.rawValue] == event.timestamp else { return }
+        pendingSyntheticReleases[modifier.flag.rawValue] = nil
+        let trackedMask = Self.modifierKeys.reduce(CGEventFlags()) { flags, key in
+            flags.union(key.flag).union(CGEventFlags(rawValue: key.deviceMask | key.otherDeviceMask))
+        }
+        event.flags = event.flags.subtracting(trackedMask).union(syntheticModifiers).union(physicalModifierFlags())
     }
 
     /// A recreated tap must sample keys that changed while it was stopped.
     func resetPhysicalModifierObservation() {
         physicalModifierStates.removeAll()
+        pendingSyntheticReleases.removeAll()
     }
 
     /// Observe physical edges without consuming them. HID state alone cannot
@@ -220,9 +238,18 @@ final class ButtonMapper {
             if code == modifier.code { mask = modifier.deviceMask }
             else if code == modifier.otherCode { mask = modifier.otherDeviceMask }
             else { continue }
-            physicalModifierStates[code] = event.flags.rawValue & mask != 0
+            let deviceBits = event.flags.rawValue & (modifier.deviceMask | modifier.otherDeviceMask)
+            if !event.flags.contains(modifier.flag) {
+                // A device's clear can coexist with a modifier on another
+                // keyboard. An owned synthetic key must not be borrowed.
+                physicalModifierStates[code] = !syntheticModifiers.contains(modifier.flag) && modifierKeyState(code)
+            } else if deviceBits != 0 {
+                physicalModifierStates[code] = event.flags.rawValue & mask != 0
+            } else {
+                physicalModifierStates[code] = modifierKeyState(code)
+            }
             let required = activeHolds.values.reduce(CGEventFlags()) { flags, hold in
-                if case .key(_, let needed, _) = hold { return flags.union(needed) }
+                if case .key(_, let needed) = hold { return flags.union(needed) }
                 return flags
             }
             pressModifiers(required)
@@ -246,33 +273,19 @@ final class ButtonMapper {
         return flags
     }
 
-    /// The keyboard modifiers of a triggering input event that the user holds,
-    /// with their left/right device bits. Modifiers this mapper holds, or
-    /// released so recently that the event may predate the release, are not
-    /// the user's and are left out.
+    /// Exclude owned modifiers and flags from a queued synthetic release,
+    /// while accepting independently observed physical keys.
     private func userModifiers(in inputFlags: CGEventFlags) -> CGEventFlags {
         var held = CGEventFlags()
-        let now = uptime()
+        let physicalFlags = physicalModifierFlags()
         for modifier in Self.modifierKeys where inputFlags.contains(modifier.flag) {
-            guard !syntheticModifiers.contains(modifier.flag) else { continue }
-            if let released = syntheticReleaseTimes[modifier.flag.rawValue], now - released < Self.syntheticReleaseGrace { continue }
+            if !physicalFlags.contains(modifier.flag) {
+                guard !syntheticModifiers.contains(modifier.flag), pendingSyntheticReleases[modifier.flag.rawValue] == nil else { continue }
+            }
             held.formUnion(modifier.flag)
             held.formUnion(CGEventFlags(rawValue: inputFlags.rawValue & (modifier.deviceMask | modifier.otherDeviceMask)))
         }
         return held
-    }
-
-    /// Flags the hardware always sets on a key. Keypad keys carry the numeric
-    /// pad flag, which apps use to tell Keypad 1 from the 1 key.
-    private static let keypadCodes: Set<Int> = [
-        kVK_ANSI_KeypadDecimal, kVK_ANSI_KeypadMultiply, kVK_ANSI_KeypadPlus, kVK_ANSI_KeypadClear,
-        kVK_ANSI_KeypadDivide, kVK_ANSI_KeypadEnter, kVK_ANSI_KeypadMinus, kVK_ANSI_KeypadEquals,
-        kVK_ANSI_Keypad0, kVK_ANSI_Keypad1, kVK_ANSI_Keypad2, kVK_ANSI_Keypad3, kVK_ANSI_Keypad4,
-        kVK_ANSI_Keypad5, kVK_ANSI_Keypad6, kVK_ANSI_Keypad7, kVK_ANSI_Keypad8, kVK_ANSI_Keypad9
-    ]
-
-    static func intrinsicFlags(for code: CGKeyCode) -> CGEventFlags {
-        keypadCodes.contains(Int(code)) ? .maskNumericPad : []
     }
 
     /// Presses the modifiers a stroke needs. A modifier already down,
@@ -294,7 +307,7 @@ final class ButtonMapper {
     /// stream pressed and no other active hold still needs.
     private func releaseModifiers(_ flags: CGEventFlags) {
         let stillNeeded = activeHolds.values.reduce(CGEventFlags()) { partial, hold in
-            if case .key(_, let required, _) = hold { return partial.union(required) }
+            if case .key(_, let required) = hold { return partial.union(required) }
             return partial
         }
         let releasable = flags.intersection(syntheticModifiers).subtracting(stillNeeded)
@@ -311,7 +324,7 @@ final class ButtonMapper {
 
     private func sendKeyStroke(_ code: CGKeyCode, flags: CGEventFlags) {
         pressModifiers(flags)
-        let alreadyHeld = activeHolds.values.contains { if case .key(let heldCode, _, _) = $0 { return heldCode == code }; return false }
+        let alreadyHeld = activeHolds.values.contains { if case .key(let heldCode, _) = $0 { return heldCode == code }; return false }
         let keyFlags = flags.union(inputModifiers)
         postKey(code, flags: keyFlags, down: true, autorepeat: alreadyHeld)
         if !alreadyHeld { postKey(code, flags: keyFlags, down: false) }

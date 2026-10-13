@@ -40,6 +40,65 @@ enum ModifierDeliveryTests {
             try check(events.allSatisfy { $0.flags.contains(flag) }, "Borrowed physical modifier \(code) remains on both key edges")
         }
 
+        // A plain mapping must combine with keyboard modifiers even when the
+        // event carries only aggregate flags or an unrelated device clears them.
+        for (code, _, flag) in physicalKeys where flag != .maskSecondaryFn {
+            for stroke in [KeyStroke(key: "c", modifiers: []), KeyStroke(key: "kp1", modifiers: [])] {
+                var plainEvents: [CGEvent] = []
+                let plainMapper = ButtonMapper(eventSink: { plainEvents.append($0) })
+                plainMapper.modifierKeyState = { $0 == code }
+                plainMapper.updateMapping([1: .keySequence(keys: [stroke], description: nil)])
+                plainMapper.observePhysicalModifier(physicalEdge(code: code, flags: flag))
+                plainMapper.handle(buttonIndex: 1)
+                try check(plainEvents.map(\.type) == [.keyDown, .keyUp], "Plain \(stroke.key) borrows physical modifier \(code) without synthetic edges")
+                try check(plainEvents.allSatisfy { $0.flags.contains(flag) }, "Plain \(stroke.key) combines with aggregate-only physical modifier \(code)")
+                try check(plainEvents.allSatisfy { $0.flags.contains(.maskNumericPad) == (stroke.key == "kp1") }, "Plain \(stroke.key) preserves keypad classification with physical modifier \(code)")
+            }
+        }
+
+        var physicalEvents: [CGEvent] = []
+        var physicalKeysDown: Set<CGKeyCode> = [CGKeyCode(kVK_Command)]
+        let physicalMapper = ButtonMapper(eventSink: { physicalEvents.append($0) })
+        physicalMapper.modifierKeyState = { physicalKeysDown.contains($0) }
+        physicalMapper.updateMapping([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: [])], description: nil)])
+        physicalMapper.observePhysicalModifier(physicalEdge(code: CGKeyCode(kVK_Command), flags: .maskCommand))
+        physicalKeysDown.insert(CGKeyCode(kVK_RightCommand))
+        physicalMapper.observePhysicalModifier(physicalEdge(code: CGKeyCode(kVK_RightCommand), flags: .maskCommand))
+        physicalKeysDown.remove(CGKeyCode(kVK_Command))
+        physicalMapper.observePhysicalModifier(physicalEdge(code: CGKeyCode(kVK_Command), flags: .maskCommand))
+        physicalMapper.handlePress(buttonIndex: 1, inputFlags: .maskCommand)
+        try check(physicalEvents.last?.flags.contains(.maskCommand) == true, "Aggregate-only left release preserves physical right Command")
+        physicalKeysDown.removeAll()
+        physicalMapper.observePhysicalModifier(physicalEdge(code: CGKeyCode(kVK_RightCommand), flags: []))
+        physicalMapper.handleRelease(buttonIndex: 1)
+        try check(physicalEvents.last?.flags.contains(.maskCommand) == false, "A plain held key release does not resurrect a released physical modifier")
+
+        physicalEvents.removeAll()
+        physicalKeysDown = [CGKeyCode(kVK_Command)]
+        physicalMapper.observePhysicalModifier(physicalEdge(code: CGKeyCode(kVK_Command), flags: []))
+        physicalMapper.handle(buttonIndex: 1)
+        try check(physicalEvents.count == 2 && physicalEvents.allSatisfy { $0.flags.contains(.maskCommand) }, "An unowned foreign clear does not hide the hardware keyboard's held Command")
+
+        var ownedEvents: [CGEvent] = []
+        let ownedMapper = ButtonMapper(eventSink: { ownedEvents.append($0) })
+        ownedMapper.modifierKeyState = { _ in false }
+        ownedMapper.updateMapping([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"])], description: nil)])
+        ownedMapper.handlePress(buttonIndex: 1)
+        ownedMapper.modifierKeyState = { $0 == CGKeyCode(kVK_Command) }
+        ownedMapper.observePhysicalModifier(physicalEdge(code: CGKeyCode(kVK_Command), flags: .maskCommand))
+        ownedMapper.observePhysicalModifier(physicalEdge(code: CGKeyCode(kVK_Command), flags: []))
+        ownedMapper.handleRelease(buttonIndex: 1)
+        try check(ownedEvents.last?.flags.contains(.maskCommand) == false, "An owned synthetic modifier is not adopted as physical ownership after an aggregate release")
+
+        for key in (0...9).map({ "kp\($0)" }) + ["keypad enter", "left arrow", "right arrow", "up arrow", "down arrow"] {
+            var nativeEvents: [CGEvent] = []
+            let nativeMapper = ButtonMapper(eventSink: { nativeEvents.append($0) })
+            nativeMapper.modifierKeyState = { _ in false }
+            nativeMapper.updateMapping([1: .keySequence(keys: [KeyStroke(key: key, modifiers: [])], description: nil)])
+            nativeMapper.handle(buttonIndex: 1)
+            try check(nativeEvents.map(\.type) == [.keyDown, .keyUp] && nativeEvents.allSatisfy { $0.flags.contains(.maskNumericPad) }, "Plain \(key) preserves its native numeric-pad flags on both key edges")
+        }
+
         var events: [CGEvent] = []
         let mapper = ButtonMapper(eventSink: { events.append($0) })
         mapper.modifierKeyState = { _ in false }
@@ -110,6 +169,7 @@ enum ModifierDeliveryTests {
         borrowed.modifierKeyState = { $0 == CGKeyCode(kVK_Command) }
         borrowed.updateMapping([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"])], description: nil)])
         borrowed.handlePress(buttonIndex: 1)
+        borrowed.modifierKeyState = { _ in false }
         borrowed.observePhysicalModifier(physicalEdge(code: CGKeyCode(kVK_Command), flags: []))
         try check(borrowedEvents.map(\.type) == [.keyDown, .flagsChanged], "Releasing a borrowed physical modifier reasserts the modifier a hold still requires")
         borrowed.handleRelease(buttonIndex: 1)
@@ -150,49 +210,47 @@ enum ModifierDeliveryTests {
         // Modifiers the user holds on the triggering input combine with the
         // mapped key even when no physical modifier edge was observed.
         let commandHeld = CGEventFlags(rawValue: CGEventFlags.maskCommand.rawValue | 0x08)
-        func heldInputMapper(_ mapping: [Int: ActionType]) -> (ButtonMapper, () -> [CGEvent], (TimeInterval) -> Void) {
+        func heldInputMapper(_ mapping: [Int: ActionType]) -> (ButtonMapper, () -> [CGEvent]) {
             var captured: [CGEvent] = []
-            var clock: TimeInterval = 100
             let mapper = ButtonMapper(eventSink: { captured.append($0) })
             mapper.modifierKeyState = { _ in false }
-            mapper.uptime = { clock }
             mapper.updateMapping(mapping)
-            return (mapper, { captured }, { clock = $0 })
+            return (mapper, { captured })
         }
         do {
-            let (mapper, events, _) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: [])], description: nil)])
+            let (mapper, events) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: [])], description: nil)])
             mapper.handlePress(buttonIndex: 1, inputFlags: commandHeld)
             try check(events().map(\.type) == [.keyDown] && events()[0].flags.contains(.maskCommand),
                       "Held Command combines with a side button mapped to C")
             try check(events()[0].flags.rawValue & 0x08 != 0, "Held Command keeps its left/right device bit")
-            mapper.handleRelease(buttonIndex: 1)
+            mapper.handleRelease(buttonIndex: 1, inputFlags: commandHeld)
             try check(events().map(\.type) == [.keyDown, .keyUp] && events()[1].flags.contains(.maskCommand),
                       "The key release matches the combined key press")
         }
         do {
-            let (mapper, events, _) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"])], description: nil)])
+            let (mapper, events) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"])], description: nil)])
             mapper.handle(buttonIndex: 1, inputFlags: commandHeld)
             try check(events().map(\.type) == [.keyDown, .keyUp] && events().allSatisfy { $0.flags.contains(.maskCommand) },
                       "A held Command the mapping also needs is borrowed, not pressed again")
         }
         do {
-            let (mapper, events, _) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "v", modifiers: ["shift"])], description: nil)])
+            let (mapper, events) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "v", modifiers: ["shift"])], description: nil)])
             mapper.handle(buttonIndex: 1, inputFlags: commandHeld)
             let keys = events().filter { $0.type == .keyDown || $0.type == .keyUp }
             try check(keys.count == 2 && keys.allSatisfy { $0.flags.contains([.maskCommand, .maskShift]) },
                       "Held modifiers combine with the mapping's own modifiers")
-            try check(events().filter { $0.type == .flagsChanged }.count == 2 && events().last?.flags == [],
-                      "Only the mapping's own modifier gets synthetic edges")
+            try check(events().filter { $0.type == .flagsChanged }.count == 2 && events().last?.flags == commandHeld,
+                      "The mapping's modifier edges preserve borrowed Command")
         }
         do {
-            let (mapper, events, _) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "kp1", modifiers: [])], description: nil)])
+            let (mapper, events) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "kp1", modifiers: [])], description: nil)])
             mapper.handle(buttonIndex: 1, inputFlags: commandHeld)
             try check(events().count == 2 && events().allSatisfy {
                 $0.getIntegerValueField(.keyboardEventKeycode) == kVK_ANSI_Keypad1 && $0.flags.contains([.maskCommand, .maskNumericPad])
             }, "Held Command combines with a keypad mapping, which keeps the numeric pad flag")
         }
         do {
-            let (mapper, events, _) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "a", modifiers: []), KeyStroke(key: "b", modifiers: [])], description: nil)])
+            let (mapper, events) = heldInputMapper([1: .keySequence(keys: [KeyStroke(key: "a", modifiers: []), KeyStroke(key: "b", modifiers: [])], description: nil)])
             mapper.handle(buttonIndex: 1, inputFlags: [.maskShift])
             try check(events().count == 4 && events().allSatisfy { $0.flags.contains(.maskShift) },
                       "Held modifiers apply to every key of a sequence")
@@ -201,21 +259,92 @@ enum ModifierDeliveryTests {
                       "A press without held modifiers sends plain keys")
         }
         do {
-            let (mapper, events, setClock) = heldInputMapper([
+            let (mapper, events) = heldInputMapper([
                 1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"])], description: nil),
                 2: .keySequence(keys: [KeyStroke(key: "v", modifiers: [])], description: nil)
             ])
             mapper.handle(buttonIndex: 1)
-            setClock(100.01)
+            let release = events().last!
             let before = events().count
             mapper.handle(buttonIndex: 2, inputFlags: commandHeld)
             try check(events().dropFirst(before).allSatisfy { !$0.flags.contains(.maskCommand) },
-                      "A trigger that predates the release of a synthetic Command does not inherit it")
-            setClock(101)
+                      "A queued synthetic Command is not inherited before its release reaches the event tap")
+            mapper.observeSyntheticModifier(release)
             let later = events().count
             mapper.handle(buttonIndex: 2, inputFlags: commandHeld)
             try check(events().count == later + 2 && events().dropFirst(later).allSatisfy { $0.flags.contains(.maskCommand) },
-                      "A physical Command pressed after the synthetic release combines again")
+                      "Fresh input modifiers combine after the synthetic release is acknowledged")
+        }
+        do {
+            let (mapper, events) = heldInputMapper([
+                1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"])], description: nil),
+                2: .keySequence(keys: [KeyStroke(key: "v", modifiers: [])], description: nil)
+            ])
+            mapper.handle(buttonIndex: 1)
+            let release = events().last!
+            mapper.modifierKeyState = { $0 == CGKeyCode(kVK_Command) }
+            mapper.observePhysicalModifier(physicalEdge(code: CGKeyCode(kVK_Command), flags: .maskCommand))
+            let before = events().count
+            mapper.handle(buttonIndex: 2, inputFlags: .maskCommand)
+            try check(events().dropFirst(before).allSatisfy { $0.flags.contains(.maskCommand) },
+                      "A new physical Command combines immediately while a synthetic release is queued")
+            mapper.observeSyntheticModifier(release)
+            try check(release.flags.contains(.maskCommand), "A queued synthetic release cannot drop a newly pressed physical Command")
+            mapper.modifierKeyState = { _ in false }
+            mapper.observePhysicalModifier(physicalEdge(code: CGKeyCode(kVK_Command), flags: []))
+            let afterRelease = events().count
+            mapper.handle(buttonIndex: 2)
+            try check(events().dropFirst(afterRelease).allSatisfy { !$0.flags.contains(.maskCommand) },
+                      "The fresh physical Command releases without sticking to later input")
+        }
+        do {
+            let (mapper, events) = heldInputMapper([
+                1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"])], description: nil),
+                2: .keySequence(keys: [KeyStroke(key: "v", modifiers: [])], description: nil)
+            ])
+            mapper.handle(buttonIndex: 1)
+            mapper.resetPhysicalModifierObservation()
+            let before = events().count
+            mapper.handle(buttonIndex: 2, inputFlags: commandHeld)
+            try check(events().dropFirst(before).allSatisfy { $0.flags.contains(.maskCommand) },
+                      "A recreated tap does not retain an acknowledgment that the old tap cannot receive")
+        }
+        let unrelatedFlags: CGEventFlags = [.maskAlphaShift, .maskNumericPad, .maskNonCoalesced]
+        do {
+            var captured: [CGEvent] = []
+            var rightShiftDown = true
+            let mapper = ButtonMapper(eventSink: { captured.append($0) })
+            mapper.modifierKeyState = { rightShiftDown && $0 == CGKeyCode(kVK_RightShift) }
+            mapper.updateMapping([1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"])], description: nil)])
+            mapper.handle(buttonIndex: 1)
+            let release = captured.last!
+            release.flags.formUnion(unrelatedFlags)
+            rightShiftDown = false
+            mapper.observePhysicalModifier(physicalEdge(code: CGKeyCode(kVK_RightShift), flags: []))
+            mapper.observeSyntheticModifier(release)
+            try check(release.flags == unrelatedFlags, "A queued acknowledgment clears released right Shift and its device bit while preserving unrelated flags")
+        }
+        do {
+            var captured: [CGEvent] = []
+            var commandDown = false
+            let mapper = ButtonMapper(eventSink: { captured.append($0) })
+            mapper.modifierKeyState = { commandDown && $0 == CGKeyCode(kVK_Command) }
+            mapper.updateMapping([
+                1: .keySequence(keys: [KeyStroke(key: "c", modifiers: ["cmd"])], description: nil),
+                2: .keySequence(keys: [KeyStroke(key: "v", modifiers: ["ctrl"])], description: nil)
+            ])
+            mapper.handlePress(buttonIndex: 1)
+            commandDown = true
+            mapper.observePhysicalModifier(physicalEdge(code: CGKeyCode(kVK_Command), flags: commandHeld))
+            mapper.handleRelease(buttonIndex: 1, inputFlags: commandHeld)
+            let release = captured.last!
+            release.flags.formUnion(unrelatedFlags)
+            mapper.handlePress(buttonIndex: 2)
+            commandDown = false
+            mapper.observePhysicalModifier(physicalEdge(code: CGKeyCode(kVK_Command), flags: []))
+            mapper.observeSyntheticModifier(release)
+            try check(release.flags == unrelatedFlags.union(.maskControl), "Acknowledgment clears a physical Command pressed during an owned hold and released before delivery, preserving current owned Control and unrelated flags")
+            mapper.releaseAll()
         }
         return count
     }

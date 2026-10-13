@@ -174,7 +174,7 @@ final class HIDListener {
             if down { NotificationCenter.default.post(name: Notification.Name("NagaButtonActivity"), object: self, userInfo: ["buttonIndex": button]) }
             // Release outputs even if the system key-up was not correlated in time.
             if !down && !(self.usesRawTiltDecoding && (15...16).contains(button)) {
-                ButtonMapper.shared.handleRelease(buttonIndex: button)
+                ButtonMapper.shared.handleRelease(buttonIndex: button, inputFlags: CGEventSource.flagsState(.combinedSessionState))
             }
         }
     }
@@ -215,7 +215,9 @@ final class HIDListener {
         lock.unlock()
         guard !changes.released.isEmpty || !changes.pressed.isEmpty else { return }
         publishInput {
-            for button in changes.released { ButtonMapper.shared.handleRelease(buttonIndex: button) }
+            for button in changes.released {
+                ButtonMapper.shared.handleRelease(buttonIndex: button, inputFlags: CGEventSource.flagsState(.combinedSessionState))
+            }
             for button in changes.pressed {
                 self.lastInputDescription = "Button \(button): recognized driver report"
                 NotificationCenter.default.post(name: Notification.Name("NagaButtonActivity"), object: self, userInfo: ["buttonIndex": button])

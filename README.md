@@ -14,7 +14,7 @@ OpenNaga is an independent project, not affiliated with or endorsed by Razer. It
 - Adaptive macOS settings window with a restrained green accent and three sections: Buttons, Sensitivity, Status
 - Interactive mouse photographs with side-button highlights, a top view and a matching assignment grid for all 19 logical controls
 - Actions per button: keyboard keys selected by category or recorded, with optional modifiers, multi-step key sequence, mouse action (browser back/forward, real mouse buttons 4/5, middle/left/right click, scroll), launch application, shell command, macro, profile switch, disabled, or original passthrough
-- Held keyboard modifiers combine with mapped buttons: Command plus a side button mapped to C sends Command-C. This also applies to keypad keys, key sequences and shortcuts.
+- While software remapping is enabled, held keyboard modifiers combine with mapped buttons: Command plus a side button mapped to C sends Command-C. This also applies to keypad keys, key sequences and shortcuts.
 - System editor with 25 actions for audio, playback, brightness, screenshots, windows, spaces and macOS tools, with a preview button
 - Existing text snippets remain saved and can be replaced through the Keys editor
 - Save a profile to the mouse's onboard memory: it keeps working after you quit OpenNaga, on another computer and over Bluetooth
@@ -27,7 +27,7 @@ OpenNaga is an independent project, not affiliated with or endorsed by Razer. It
 - Settings appear in the Dock and Command-Tab while the window is open
 - Remapping activity prevents App Nap while allowing normal system sleep
 
-Release 2.5.0 includes scroll sensitivity, mouse-profile import and the modifier/USB fixes from the October 12 audit. See the [release notes](Documentation/release-2.5.0.md) for changes and verified behavior.
+Release 2.5.1 corrects held keyboard modifiers, key release state and keypad identification. See the [release notes](Documentation/release-2.5.1.md) for changes and verified behavior. Scroll sensitivity and mouse-profile import were added in 2.5.0.
 
 ## Requirements
 
@@ -37,7 +37,7 @@ Release 2.5.0 includes scroll sensitivity, mouse-profile import and the modifier
 
 ## Install and first run
 
-1. Download `OpenNaga-v2.5.0.dmg` from the [latest release](https://github.com/Zer0codestuff/OpenNaga/releases/latest), or build the app bundle (see below).
+1. Download `OpenNaga-v2.5.1.dmg` from the [latest release](https://github.com/Zer0codestuff/OpenNaga/releases/latest), or build the app bundle (see below).
 2. Open the DMG and drag `OpenNaga.app` to Applications. Permissions are tied to the app location, so do not move it afterwards.
 3. The release is not notarized. On first launch right-click the app and choose Open, or run `xattr -dr com.apple.quarantine /Applications/OpenNaga.app`.
 4. Launch it. macOS prompts for two permissions; both are required:

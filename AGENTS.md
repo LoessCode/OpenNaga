@@ -25,7 +25,7 @@ Naming: the shipped app is `OpenNaga.app` (executable `OpenNaga`, display name O
 swift build                      # debug
 bash Scripts/make_dev_certificate.sh   # once: self-signed "NagaController Dev" identity, keeps TCC grants across rebuilds
 bash Scripts/build_app.sh        # release bundle ./OpenNaga.app, signed with the dev identity if present, else ad-hoc
-bash Scripts/test.sh             # 1020 dependency-free checks, including async modifier/macro checks
+bash Scripts/test.sh             # 1093 dependency-free checks, including async modifier/macro checks
 bash Scripts/make_dmg.sh         # ad-hoc signed release DMG (OpenNaga-v<version>.dmg, git-ignored)
 gh release create vX.Y.Z OpenNaga-vX.Y.Z.dmg --title "OpenNaga X.Y.Z" --notes-file <file>   # publish
 open OpenNaga.app --args --diagnose-file /tmp/naga.json   # read-only hardware probe
@@ -35,20 +35,21 @@ open -n OpenNaga.app --args --inspect-onboard --diagnose-file /tmp/o.json   # re
 
 `Package.swift` also declares a `TapTester` executable and an XCTest target (`Tests/NagaControllerTests`) that cannot run without Xcode.
 
-## Current status (2026-10-12)
+## Current status (2026-10-13)
 
 - Single branch: everything lives on `main`. Feature branches and extra worktrees were removed after 2.3.0; do not create long-lived branches.
 - Version 2.3.0, build 7: onboard memory (Save to Mouse / Restore Previous Assignments) ported from the Italian 2.1.1-based work onto 2.2.0, translated, renamed to OpenNaga. Published as GitHub release v2.3.0 with `OpenNaga-v2.3.0.dmg` (Apple Silicon, ad-hoc signed, not notarized).
 - Version 2.4.0, build 8: own data folder with one-time import, released as v2.4.0. Verified with the release bundle in an isolated home (`CFFIXED_USER_HOME`) holding copies of the user's real `profiles.json` and mouse backup: files imported byte for byte, the Test profile and "Mouse memory: Test" shown, no re-import on the second launch, older folder unchanged. Not checked on hardware, since only file locations changed.
 - Version 2.5.0, build 9: scroll sensitivity, mouse-profile import, modifier delivery, USB response handling and settings-window fixes from the October 12 audit. Release artifact: `OpenNaga-v2.5.0.dmg`, Apple Silicon, ad-hoc signed and not notarized; release notes in `Documentation/release-2.5.0.md`.
-- 1009 dependency-free checks pass after the issue audit. Release compilation succeeds; dependency-free compilation emits the existing macOS 14 `onChange` deprecations. README screenshots use the synthetic `Everyday` profile (`.build/showcase-home`, `CFFIXED_USER_HOME`).
+- Version 2.5.1, build 10: held keyboard modifier observation, current key-up flags, queued synthetic release acknowledgment and native keypad/arrow classification. Release artifact: `OpenNaga-v2.5.1.dmg`, Apple Silicon, ad-hoc signed and not notarized; release notes in `Documentation/release-2.5.1.md`.
+- 1093 dependency-free checks and release compilation pass after reviewing the October 13 automated follow-up. Physical Command+C and Command+Keypad 6 passed, including releasing Command before the mouse button and plain input afterward. Issue #6 remains open for the reporter's Keyboard Maestro confirmation. Dependency-free compilation emits the existing macOS 14 `onChange` deprecations. README screenshots use the synthetic `Everyday` profile (`.build/showcase-home`, `CFFIXED_USER_HOME`).
 - Hardware evidence: on 2026-09-11 the Test profile was written and read back (21 descriptors), Escape on side button 1 survived a power cycle. On 2026-09-30 the DPI buttons were rewritten to DPI up/down, all 21 stored and active descriptors verified, and the user tested the saved profile over Bluetooth with the app closed and reported it works (tentative, not per-button).
 - The user's journal `onboard-profile.json` was rebound from USB location `18026496` to `18022400` by hand before the model-based check existed; the original is `onboard-profile.port-0x01131000.bak.json` in Application Support.
 - `--diagnose` run from a terminal fails with `0xe00002e2` (kIOReturnNotPermitted): the launching process needs Input Monitoring. Use `open -n OpenNaga.app --args --diagnose-file <path>` instead.
 
 ## Recent changes
 
-- 2026-10-13 (#6 follow-up): modifiers the user holds while pressing a mapped control now combine with the mapped output (Command + side button mapped to C sends Command-C; keypad mappings too). The tap passes the triggering event's flags to `ButtonMapper.handlePress(buttonIndex:inputFlags:)`; driver-mode reports sample `CGEventSource.flagsState(.combinedSessionState)`. Modifiers OpenNaga holds itself, or released less than 50 ms earlier, are excluded so a synthetic Command cannot leak into the next press. Keypad keys now carry `maskNumericPad` like hardware events. 1020 checks; physical confirmation with Keyboard Maestro is pending.
+- 2026-10-13 (#6 follow-up): reviewed automated commits `100c0b0` and `18fe902`. Their 1020 checks passed, but new regressions reproduced a missing modifier after an aggregate-only physical event. Corrected that observation, sampled current modifiers on key release, replaced the 50 ms exclusion with acknowledgment of the actual synthetic release, refreshed queued release flags, and retained Quartz's native numeric-pad classification for keypad and arrow keys. The tap forwards trigger and release flags; raw driver reports sample session flags. 1093 checks pass. A read-only probe independently observed the internal keyboard's Command and confirmed letter/keypad output, inverse release order and no stuck modifier. It performed no mouse writes or persisted profile edits. See `Documentation/verification-2026-10-13.md`.
 - 2.5.0 (2026-10-12): package the audited fixes and new scroll/import features, bump the bundle to build 9, update the download instructions and document validation limits. Public DMGs use ad-hoc signing; the installed copy keeps the local development identity so TCC permissions remain stable.
 - 2026-10-12: audited open issues #6/#7 and PRs #1 through #5. The automated modifier fix did not compile, and the scroll commit only added an unused helper. Fixed modifier API/state ownership, overlapping holds and macros; completed scroll settings, HID correlation and event scaling. Integrated USB callback timeout units, normal-layer reply normalization, safe mouse import, full sidebar hit areas and temporary Dock/Command-Tab presence. Added bounded GET_REPORT-only polling for valid busy/stale replies; uncertain writes are not resent on polling exhaustion. `.github/workflows/validate.yml` builds and runs the dependency-free suite on pushes and PRs. The external issue bot is not configured in this repository.
 - 2026-10-12 validation: USB receiver `1532:00b4` read DPI 1600x1600, polling 1000 Hz, battery 93%, normal mode and all 21 stored/active bindings. Explicit same-value DPI/poll writes, a temporary F20 onboard save/restore and the production journaled driver-mode toggle/shutdown restore passed. All 21 original assignments and settings were restored. Six live synthetic shortcut combinations reached macOS with balanced modifiers. Light/dark minimum-size UI, blank sidebar-row clicks, close/reopen and activation-policy changes checked. See `Documentation/verification-2026-10-12.md` for evidence and limits; do not infer per-button or Bluetooth coverage from USB readback.
@@ -62,6 +63,8 @@ open -n OpenNaga.app --args --inspect-onboard --diagnose-file /tmp/o.json   # re
 ## Installed copy
 
 On 2026-10-12 neither app nor either data folder existed on this Mac. Installed the audited source build as `/Applications/OpenNaga.app`, then updated it to 2.5.0 build 9 using the local `NagaController Dev` identity; application data remained byte-identical. The user granted Accessibility and Input Monitoring. Imported the live mouse's 19 editable assignments into the selected local `From Mouse` profile, retaining its `onboardOnly` protection. Hardware assignments and settings were restored after testing; no recovery journal remains. The bundle ID is unchanged; the app is not notarized. Keep only this installed copy, and quit it before replacing its bundle. Temporary audit fixtures and captures live under `.build/audit` and `/tmp/opennaga-*`; any pending test backup must be restored before further mouse writes.
+
+Updated the installed copy to 2.5.1 build 10 on 2026-10-13. Its development-signing requirement matches the previous app, both permissions remain granted, and `profiles.json` stayed byte-identical. Read-only installed-app diagnostics verified receiver `1532:00b4`, DPI 1600x1600, polling 1000 Hz, battery 93% and mode 0 without warnings or writes. The temporary input probe is stopped; the selected `From Mouse` profile keeps its protection.
 
 ## Preferences and constraints
 
@@ -77,6 +80,7 @@ On 2026-10-12 neither app nor either data folder existed on this Mac. Installed 
 
 ## Known issues / next steps
 
+- Issue #6 remains open for the original reporter's Keyboard Maestro confirmation. Physical letter/keypad combining passed on this Mac. Distinguish software remapping from native onboard output; imported profiles must retain their protection.
 - Not notarized: users see a Gatekeeper warning. A Developer ID and notarization would remove it.
 - USB driver-mode toggle/restore, all 21 onboard descriptor readbacks, a physical Command+Shift shortcut and native wheel/tilt scaling passed on 2026-10-12. Remaining physical checks: per-button onboard execution, software remapping over Bluetooth, power-cycle persistence of the new build, simultaneous physical/synthetic modifier changes and USB unplug/replug.
 - System actions: Do Not Disturb needs a user-assigned shortcut; brightness depends on display support; media keys depend on the playback app.

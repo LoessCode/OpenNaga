@@ -78,7 +78,8 @@ enum SystemActionTests {
             try check(events.count == expectedCount, "System shortcut ignores duplicate press: \(action)")
             let keyEvents = events.filter { $0.type == .keyDown || $0.type == .keyUp }
             try check(keyEvents.map(\.type) == [.keyDown, .keyUp], "System shortcut balances key edges: \(action)")
-            try check(keyEvents.allSatisfy { $0.getIntegerValueField(.keyboardEventKeycode) == code && $0.flags == flags }, "System shortcut key and modifiers: \(action)")
+            let nativeFlags = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: true)!.flags.intersection(.maskNumericPad)
+            try check(keyEvents.allSatisfy { $0.getIntegerValueField(.keyboardEventKeycode) == code && $0.flags == flags.union(nativeFlags) }, "System shortcut key and modifiers: \(action)")
             try check(events.filter { $0.type == .flagsChanged }.count == modifierCount * 2, "System shortcut balances modifier edges: \(action)")
             try check(events.allSatisfy { $0.getIntegerValueField(.eventSourceUserData) == ButtonMapper.syntheticMarker }, "System shortcut events are tagged: \(action)")
             mapper.handleRelease(buttonIndex: 1)

@@ -110,6 +110,7 @@ final class EventTapManager {
         let manager = Unmanaged<EventTapManager>.fromOpaque(refcon).takeUnretainedValue()
 
         if event.getIntegerValueField(.eventSourceUserData) == ButtonMapper.syntheticMarker {
+            ButtonMapper.shared.observeSyntheticModifier(event)
             return Unmanaged.passUnretained(event)
         }
         if type == .flagsChanged {
@@ -165,7 +166,7 @@ final class EventTapManager {
         }
         guard manager.activeDownButtons.remove(button) != nil else { return Unmanaged.passUnretained(event) }
         manager.repeatOwnership.invalidate(button: button)
-        ButtonMapper.shared.handleRelease(buttonIndex: button)
+        ButtonMapper.shared.handleRelease(buttonIndex: button, inputFlags: event.flags)
         return nil
     }
 
