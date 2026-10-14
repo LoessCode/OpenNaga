@@ -12,6 +12,15 @@ enum ActionType: Equatable {
     case textSnippet(text: String, description: String?)
     case macro(steps: [MacroStep], description: String?)
     case profileSwitch(profile: String, description: String?)
+    /// Holding this control switches the other controls to the Hypershift layer.
+    case hypershift(description: String?)
+}
+
+/// A profile keeps a standard layer and a Hypershift layer that is used
+/// while a control assigned to `ActionType.hypershift` is held.
+enum MappingLayer: String, CaseIterable {
+    case standard = "Standard"
+    case hypershift = "Hypershift"
 }
 
 enum MouseAction: String, Codable, CaseIterable {
@@ -72,6 +81,7 @@ extension ActionType {
         case .textSnippet(_, let description): return description ?? "Text"
         case .macro(_, let description): return description ?? "Macro"
         case .profileSwitch(let profile, let description): return description ?? "Profile: \(profile)"
+        case .hypershift(let description): return description ?? "Hypershift"
         }
     }
 }

@@ -10,6 +10,7 @@ private enum EditorKind: String, CaseIterable {
     case profile = "Switch profile"
     case shell = "Shell command"
     case macro = "Macro"
+    case hypershift = "Hypershift key"
     case disabled = "Disabled"
 }
 
@@ -28,6 +29,15 @@ struct ActionInspector: View {
     @State private var recording = false
     @State private var validationError: String?
 
+    private var layer: MappingLayer { model.layer }
+    private var current: ActionType? { model.action(for: button, layer: layer) }
+    private var shiftedLayer: Bool { layer == .hypershift }
+    // The Hypershift layer cannot hold a second Hypershift key.
+    private var kinds: [EditorKind] { EditorKind.allCases.filter { !shiftedLayer || $0 != .hypershift } }
+
+    private func title(_ kind: EditorKind) -> String {
+        kind == .original && shiftedLayer ? "Same as standard" : kind.rawValue
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -37,29 +47,30 @@ struct ActionInspector: View {
                     .background(UIStyle.selection).clipShape(RoundedRectangle(cornerRadius: 10))
                 VStack(alignment: .leading, spacing: 4) {
                     Text(buttonName(button)).font(.system(size: 17, weight: .semibold))
-                    Text("\(model.profile)").font(.caption).foregroundStyle(.secondary)
+                    Text(shiftedLayer ? "\(model.profile), Hypershift layer" : "\(model.profile)")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             HStack(spacing: 5) {
                 Image(systemName: "checkmark.circle")
-                Text(model.mapping[button]?.displayName ?? "Original function")
+                Text(shiftedLayer ? model.summary(for: button, layer: layer) : current?.displayName ?? "Original function")
                     .lineLimit(2)
             }.font(.callout).foregroundStyle(.secondary)
-            if button >= 18 {
+            if button >= 18 && !(shiftedLayer && model.isHypershiftKey(button)) {
                 Label("Keep a primary click available so you can still use the Mac.", systemImage: "exclamationmark.triangle")
                     .font(.callout).foregroundStyle(.orange)
             }
-            Picker("Action", selection: Binding(get: { kind }, set: changeKind)) {
-                ForEach(EditorKind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            Divider()
-            editor
-            if kind != .original && kind != .disabled {
-                DisclosureGroup("Custom name") {
-                    TextField("Optional name", text: $description)
-                        .onSubmit { persist() }.padding(.top, 8)
-                    Text("Press Return to save the name.").font(.caption).foregroundStyle(.secondary)
-                }.font(.callout)
+            if shiftedLayer && model.isHypershiftKey(button) {
+                Label("This control is the Hypershift key.", systemImage: "shift")
+                Text("Hold it to use the Hypershift layer. To change its own action, switch to the Standard layer.")
+                    .foregroundStyle(.secondary)
+                Button("Edit Standard Layer") { model.layer = .standard }
+            } else {
+                if shiftedLayer && !model.hasHypershiftKey {
+                    Label("No Hypershift key yet. In the Standard layer, set a control's action to Hypershift key.", systemImage: "exclamationmark.triangle")
+                        .font(.callout).foregroundStyle(.orange)
+                }
+                actionEditor
             }
             if let validationError {
                 Text(validationError).font(.callout).foregroundStyle(.red)
@@ -69,7 +80,7 @@ struct ActionInspector: View {
         .textFieldStyle(.roundedBorder)
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear { load() }
-        .onChange(of: model.mapping[button]) { _ in
+        .onChange(of: current) { _ in
             if !recording { load() }
         }
         .onDisappear { recording = false }
@@ -78,12 +89,38 @@ struct ActionInspector: View {
         }
     }
 
+    @ViewBuilder private var actionEditor: some View {
+        Picker("Action", selection: Binding(get: { kind }, set: changeKind)) {
+            ForEach(kinds, id: \.self) { Text(title($0)).tag($0) }
+        }
+        Divider()
+        editor
+        if kind != .original && kind != .disabled {
+            DisclosureGroup("Custom name") {
+                TextField("Optional name", text: $description)
+                    .onSubmit { persist() }.padding(.top, 8)
+                Text("Press Return to save the name.").font(.caption).foregroundStyle(.secondary)
+            }.font(.callout)
+        }
+    }
+
     @ViewBuilder private var editor: some View {
         switch kind {
         case .original:
-            Label("No remapping", systemImage: "arrow.uturn.backward")
-            Text("The button keeps its default function. Choose Keys to assign a keyboard key.")
+            if shiftedLayer {
+                Label("Same as standard", systemImage: "arrow.uturn.backward")
+                Text("While Hypershift is held, this control keeps its Standard layer action: \(model.mapping[button]?.displayName ?? "Original function").")
+                    .foregroundStyle(.secondary)
+            } else {
+                Label("No remapping", systemImage: "arrow.uturn.backward")
+                Text("The button keeps its default function. Choose Keys to assign a keyboard key.")
+                    .foregroundStyle(.secondary)
+            }
+        case .hypershift:
+            Label("Hypershift key", systemImage: "shift")
+            Text("While you hold this control, the other controls use their Hypershift layer actions. Controls without one keep their standard action. Use a control you can hold, such as a side button or the middle click.")
                 .foregroundStyle(.secondary)
+            Button("Edit Hypershift Layer") { model.layer = .hypershift }
         case .disabled:
             Label("Button disabled", systemImage: "nosign")
             Text("The signal is blocked only while remapping is on.")
@@ -95,7 +132,8 @@ struct ActionInspector: View {
             }
             Text("Recommended for browser navigation.").font(.caption).foregroundStyle(.secondary)
             Picker("Function", selection: Binding(get: { mouse }, set: { mouse = $0; persist() })) {
-                ForEach(MouseAction.allCases, id: \.rawValue) { Text($0.title).tag($0) }
+                // DPI functions exist only in mouse memory, which has no Hypershift layer.
+                ForEach(MouseAction.allCases.filter { !shiftedLayer || ($0 != .dpiUp && $0 != .dpiDown) }, id: \.rawValue) { Text($0.title).tag($0) }
             }
             Text(mouse == .dpiUp || mouse == .dpiDown
                  ? "Hardware function: choose Save to Mouse to apply it. It changes the DPI stage inside the mouse, even when the app is closed."
@@ -270,7 +308,7 @@ struct ActionInspector: View {
         selectedStroke = 0
         description = ""
         validationError = nil
-        if [.original, .disabled, .mouse, .system].contains(newKind) { persist() }
+        if [.original, .disabled, .mouse, .system, .hypershift].contains(newKind) { persist() }
     }
 
     private func load() {
@@ -278,8 +316,9 @@ struct ActionInspector: View {
         description = ""
         keys = []
         systemShortcuts = MacSystemShortcut.preferences()
-        switch model.mapping[button] {
+        switch current {
         case nil: kind = .original
+        case .hypershift(let label): kind = .hypershift; description = label ?? ""
         case .audio(let action, let label): kind = .system; system = SystemAction(audio: action); description = label ?? ""
         case .system(let action, let label): kind = .system; system = action; description = label ?? ""
         case .disabled: kind = .disabled
@@ -313,6 +352,9 @@ struct ActionInspector: View {
             action = .keySequence(keys: keys, description: label)
         case .application: action = .application(path: text, description: label)
         case .profile: action = .profileSwitch(profile: text, description: label)
+        case .hypershift:
+            guard !shiftedLayer else { return }
+            action = .hypershift(description: label)
         case .shell: action = .systemCommand(command: text, description: label)
         case .macro:
             do {
@@ -327,7 +369,7 @@ struct ActionInspector: View {
                 action = .macro(steps: steps, description: label)
             } catch { validationError = "Invalid JSON: \(error.localizedDescription)"; return }
         }
-        model.save(action, button: button)
+        model.save(action, button: button, layer: layer)
     }
 }
 

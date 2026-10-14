@@ -9,6 +9,8 @@ final class WorkspaceModel: ObservableObject {
     @Published var profile = ""
     @Published var profiles: [String] = []
     @Published var mapping: [Int: ActionType] = [:]
+    @Published var hypershiftMapping: [Int: ActionType] = [:]
+    @Published var layer: MappingLayer = .standard
     @Published var onboardActive = false
     @Published var onboardOnly = false
     @Published var onboardName: String?
@@ -54,6 +56,7 @@ final class WorkspaceModel: ObservableObject {
         profile = config.currentProfileName
         profiles = config.availableProfiles()
         mapping = config.mappingForCurrentProfile()
+        hypershiftMapping = config.mappingForCurrentProfile(layer: .hypershift)
         error = config.lastError
         deviceName = HIDListener.shared.connectedDeviceName ?? "No mouse detected"
         onboardActive = OnboardProfileStore.isActive
@@ -84,9 +87,28 @@ final class WorkspaceModel: ObservableObject {
         refresh()
     }
 
-    func save(_ action: ActionType?, button: Int) {
-        ConfigManager.shared.setAction(forButton: button, action: action)
+    func save(_ action: ActionType?, button: Int, layer: MappingLayer = .standard) {
+        ConfigManager.shared.setAction(forButton: button, action: action, layer: layer)
         refresh()
+    }
+
+    func action(for button: Int, layer: MappingLayer) -> ActionType? {
+        layer == .standard ? mapping[button] : hypershiftMapping[button]
+    }
+
+    func isHypershiftKey(_ button: Int) -> Bool {
+        if case .hypershift? = mapping[button] { return true }
+        return false
+    }
+
+    var hasHypershiftKey: Bool { mapping.keys.contains { isHypershiftKey($0) } }
+
+    /// The text the assignment list shows for a control in a layer.
+    func summary(for button: Int, layer: MappingLayer) -> String {
+        let standard = mapping[button]?.displayName ?? "Original"
+        guard layer == .hypershift else { return standard }
+        if isHypershiftKey(button) { return "Hypershift key" }
+        return hypershiftMapping[button]?.displayName ?? "Standard: \(standard)"
     }
 
     func selectProfile(_ name: String) {

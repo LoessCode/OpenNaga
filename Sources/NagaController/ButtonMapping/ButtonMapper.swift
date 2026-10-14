@@ -6,6 +6,9 @@ final class ButtonMapper {
 
     static let syntheticMarker: Int64 = 0x4e4147414354524c
     private var mapping: [Int: ActionType] = [:]
+    private var hypershiftMapping: [Int: ActionType] = [:]
+    // Controls assigned to Hypershift that are held right now.
+    private var hypershiftTriggers: Set<Int> = []
     private enum Hold { case key(CGKeyCode, CGEventFlags), mouse(CGMouseButton) }
     private var activeHolds: [Int: Hold] = [:]
     private var pressed: Set<Int> = []
@@ -47,15 +50,29 @@ final class ButtonMapper {
         self.workspaceActionSink = workspaceActionSink
     }
 
-    func hasMapping(buttonIndex: Int) -> Bool {
-        if case .mouse(let action, _) = mapping[buttonIndex], action == .dpiUp || action == .dpiDown { return false }
-        return mapping[buttonIndex] != nil
+    /// True while at least one Hypershift control is held.
+    var isHypershiftActive: Bool { !hypershiftTriggers.isEmpty }
+
+    /// The action a press performs now. While Hypershift is held, a control
+    /// with a Hypershift assignment uses it and any other control keeps its
+    /// standard action. A Hypershift control always stays a Hypershift control.
+    func action(forButton buttonIndex: Int) -> ActionType? {
+        if case .hypershift = mapping[buttonIndex] { return mapping[buttonIndex] }
+        if isHypershiftActive, let shifted = hypershiftMapping[buttonIndex] { return shifted }
+        return mapping[buttonIndex]
     }
 
-    func updateMapping(_ newMapping: [Int: ActionType]) {
+    func hasMapping(buttonIndex: Int) -> Bool {
+        guard let action = self.action(forButton: buttonIndex) else { return false }
+        if case .mouse(let mouse, _) = action, mouse == .dpiUp || mouse == .dpiDown { return false }
+        return true
+    }
+
+    func updateMapping(_ newMapping: [Int: ActionType], hypershift: [Int: ActionType] = [:]) {
         releaseAll()
         EventTapManager.shared.resetInputState()
         mapping = newMapping
+        hypershiftMapping = hypershift.filter { if case .hypershift = $0.value { return false }; return true }
     }
 
     func releaseAll() {
@@ -63,6 +80,7 @@ final class ButtonMapper {
         generation += 1
         for button in Array(activeHolds.keys) { handleRelease(buttonIndex: button) }
         pressed.removeAll()
+        hypershiftTriggers.removeAll()
         if activeHolds.isEmpty { syntheticModifiers = [] }
     }
 
@@ -76,7 +94,10 @@ final class ButtonMapper {
     /// so they are merged into the keys this press sends (Command held with a
     /// side button mapped to C sends Command-C).
     func handlePress(buttonIndex: Int, inputFlags: CGEventFlags = []) {
-        guard let action = mapping[buttonIndex], pressed.insert(buttonIndex).inserted else { return }
+        guard let action = self.action(forButton: buttonIndex), pressed.insert(buttonIndex).inserted else { return }
+        // The layer is chosen at press time; holds release by button index,
+        // so an output started in one layer ends correctly in the other.
+        if case .hypershift = action { hypershiftTriggers.insert(buttonIndex); return }
         let held = userModifiers(in: inputFlags)
         inputModifiers = held
         defer { inputModifiers = [] }
@@ -102,6 +123,7 @@ final class ButtonMapper {
 
     func handleRelease(buttonIndex: Int, inputFlags: CGEventFlags? = nil) {
         pressed.remove(buttonIndex)
+        hypershiftTriggers.remove(buttonIndex)
         guard let hold = activeHolds.removeValue(forKey: buttonIndex) else { return }
         // Do not release an output another physical input still holds.
         switch hold {
@@ -144,6 +166,7 @@ final class ButtonMapper {
         case .textSnippet(let text, _): runMacro([MacroStep(type: "text", text: text)])
         case .macro(let steps, _): runMacro(steps)
         case .profileSwitch(let profile, _): DispatchQueue.main.async { ConfigManager.shared.setCurrentProfile(profile) }
+        case .hypershift: break // Handled as a held layer in handlePress.
         }
     }
 

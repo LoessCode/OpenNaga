@@ -55,7 +55,7 @@ struct OnboardProfilePlan {
             }
         case .audio(let action, _): return try system(SystemAction(audio: action))
         case .system(let action, _): return try system(action)
-        case .application, .systemCommand, .macro, .profileSwitch:
+        case .application, .systemCommand, .macro, .profileSwitch, .hypershift:
             throw unsupported("this action needs OpenNaga running.")
         }
     }

@@ -20,6 +20,13 @@ struct Profile: Codable {
     // Imported firmware assignments cannot reliably identify physical controls
     // through the factory keyboard/mouse event decoder.
     var onboardOnly: Bool? = nil
+    // Assignments used while a Hypershift control is held. Absent in files
+    // written before the layer existed.
+    var hypershift: [String: ButtonAction]? = nil
+
+    func buttons(in layer: MappingLayer) -> [String: ButtonAction] {
+        layer == .standard ? buttons : hypershift ?? [:]
+    }
 }
 
 struct ButtonAction: Codable {
@@ -139,11 +146,12 @@ final class ConfigManager {
         return Array(profiles.keys).sorted()
     }
 
-    func mappingForCurrentProfile() -> [Int: ActionType] {
+    func mappingForCurrentProfile(layer: MappingLayer = .standard) -> [Int: ActionType] {
         guard let profile = profiles[currentProfileName] else { return [:] }
         var result: [Int: ActionType] = [:]
-        for (key, action) in profile.buttons {
+        for (key, action) in profile.buttons(in: layer) {
             if let idx = Int(key), (1...19).contains(idx), let mapped = convert(action: action) {
+                if layer == .hypershift, case .hypershift = mapped { continue }
                 result[idx] = mapped
             }
         }
@@ -193,6 +201,9 @@ final class ConfigManager {
             guard var profile = profiles[name] else { continue }
             for (button, action) in profile.buttons where action.type == "profileSwitch" && action.profile == oldName {
                 profile.buttons[button] = toButtonAction(.profileSwitch(profile: newTrim, description: action.description))
+            }
+            for (button, action) in profile.hypershift ?? [:] where action.type == "profileSwitch" && action.profile == oldName {
+                profile.hypershift?[button] = toButtonAction(.profileSwitch(profile: newTrim, description: action.description))
             }
             profiles[name] = profile
         }
@@ -283,6 +294,8 @@ final class ConfigManager {
         case "profileSwitch":
             if let p = action.profile { return .profileSwitch(profile: p, description: action.description) }
             return nil
+        case "hypershift":
+            return .hypershift(description: action.description)
         default:
             return nil
         }
@@ -310,18 +323,27 @@ final class ConfigManager {
             return ButtonAction(type: "macro", keys: nil, description: description, path: nil, command: nil, text: nil, steps: steps, profile: nil)
         case .profileSwitch(let profile, let description):
             return ButtonAction(type: "profileSwitch", keys: nil, description: description, path: nil, command: nil, text: nil, steps: nil, profile: profile)
+        case .hypershift(let description):
+            return ButtonAction(type: "hypershift", keys: nil, description: description, path: nil, command: nil, text: nil, steps: nil, profile: nil)
         }
     }
 
-    // Update a single button's action in the current profile and refresh mapping
-    func setAction(forButton index: Int, action: ActionType?) {
+    // Update a single button's action in the current profile and refresh mapping.
+    // The Hypershift layer cannot hold another Hypershift control.
+    func setAction(forButton index: Int, action: ActionType?, layer: MappingLayer = .standard) {
         guard (1...19).contains(index) else { return }
+        if layer == .hypershift, case .hypershift? = action { return }
         var profile = profiles[currentProfileName] ?? Profile(buttons: [:])
         let key = String(index)
+        var buttons = profile.buttons(in: layer)
         if let action = action {
-            profile.buttons[key] = toButtonAction(action)
+            buttons[key] = toButtonAction(action)
         } else {
-            profile.buttons.removeValue(forKey: key)
+            buttons.removeValue(forKey: key)
+        }
+        switch layer {
+        case .standard: profile.buttons = buttons
+        case .hypershift: profile.hypershift = buttons.isEmpty ? nil : buttons
         }
         profiles[currentProfileName] = profile
         updateRuntimeMapping()
@@ -351,7 +373,9 @@ final class ConfigManager {
     }
 
     private func updateRuntimeMapping() {
-        ButtonMapper.shared.updateMapping(currentProfileIsOnboardOnly ? [:] : mappingForCurrentProfile())
+        let onboard = currentProfileIsOnboardOnly
+        ButtonMapper.shared.updateMapping(onboard ? [:] : mappingForCurrentProfile(),
+                                          hypershift: onboard ? [:] : mappingForCurrentProfile(layer: .hypershift))
     }
 
     private func userProfilesURL() throws -> URL {

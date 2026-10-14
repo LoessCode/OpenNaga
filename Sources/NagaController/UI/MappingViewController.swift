@@ -59,7 +59,7 @@ struct NagaWorkspace: View {
                             Divider()
                             ScrollView {
                                 ActionInspector(button: selectedButton)
-                                    .id("\(model.profile)-\(selectedButton)")
+                                    .id("\(model.profile)-\(selectedButton)-\(model.layer.rawValue)")
                                     .padding(24)
                             }.frame(width: 340)
                                 .background(.background.opacity(0.45))
@@ -93,6 +93,7 @@ struct NagaWorkspace: View {
                args.indices.contains(index + 1), let button = Int(args[index + 1]), (1...19).contains(button) {
                 selectedButton = button
             }
+            if args.contains("--snapshot-hypershift") { model.layer = .hypershift }
         }
     }
 

@@ -22,7 +22,9 @@ struct TestRunner {
             print("Data folder: \(storage) checks passed")
             let imported = try ImportedProfileTests.run()
             print("Imported profiles: \(imported) checks passed")
-            print("PASS: \(core + system + modifiers + native + scroll + hardware + onboard + storage + imported) checks")
+            let hypershift = try HypershiftTests.run()
+            print("Hypershift layer: \(hypershift) checks passed")
+            print("PASS: \(core + system + modifiers + native + scroll + hardware + onboard + storage + imported + hypershift) checks")
         } catch {
             fputs("FAIL: \(error)\n", stderr)
             exit(1)

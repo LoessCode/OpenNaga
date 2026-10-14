@@ -10,10 +10,16 @@ struct MouseWorkspace: View {
         GeometryReader { geometry in
             ScrollView {
                 VStack(spacing: 16) {
-                    Picker("Mouse view", selection: $topView) {
-                        Text("Side").tag(false)
-                        Text("Top").tag(true)
-                    }.pickerStyle(.segmented).labelsHidden().frame(width: 232)
+                    HStack(spacing: 12) {
+                        Picker("Mouse view", selection: $topView) {
+                            Text("Side").tag(false)
+                            Text("Top").tag(true)
+                        }.pickerStyle(.segmented).labelsHidden().frame(width: 160)
+                        Picker("Layer", selection: $model.layer) {
+                            ForEach(MappingLayer.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }.pickerStyle(.segmented).labelsHidden().frame(width: 200)
+                            .help("Hypershift assignments apply while you hold the control assigned to Hypershift")
+                    }
                     MouseDiagram(selectedButton: $selectedButton, topView: topView)
                         .frame(height: max(220, min(440, geometry.size.height - 315)))
                     HStack {
@@ -44,8 +50,9 @@ struct MouseWorkspace: View {
                     .clipShape(RoundedRectangle(cornerRadius: 5))
                 VStack(alignment: .leading, spacing: 2) {
                     if index >= 13 { Text(buttonName(index)).font(.system(size: 11, weight: .medium)).lineLimit(1) }
-                    Text(model.mapping[index]?.displayName ?? "Original")
-                        .font(.system(size: 11)).foregroundStyle(index >= 13 ? .secondary : .primary)
+                    Text(model.summary(for: index, layer: model.layer))
+                        .font(.system(size: 11))
+                        .foregroundStyle(index >= 13 || (model.layer == .hypershift && model.hypershiftMapping[index] == nil) ? .secondary : .primary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
@@ -57,8 +64,8 @@ struct MouseWorkspace: View {
                     lineWidth: model.activeButton == index ? 2 : 1))
                 .contentShape(Rectangle())
         }.buttonStyle(.plain)
-            .help("\(buttonName(index)): \(model.mapping[index]?.displayName ?? "Original")")
-            .accessibilityLabel("\(buttonName(index)), \(model.mapping[index]?.displayName ?? "Original")")
+            .help("\(buttonName(index)): \(model.summary(for: index, layer: model.layer))")
+            .accessibilityLabel("\(buttonName(index)), \(model.summary(for: index, layer: model.layer))")
             .accessibilityAddTraits(selectedButton == index ? [.isSelected] : [])
     }
 }

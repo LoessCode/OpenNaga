@@ -14,6 +14,7 @@ OpenNaga is an independent project, not affiliated with or endorsed by Razer. It
 - Adaptive macOS settings window with a restrained green accent and three sections: Buttons, Sensitivity, Status
 - Interactive mouse photographs with side-button highlights, a top view and a matching assignment grid for all 19 logical controls
 - Actions per button: keyboard keys selected by category or recorded, with optional modifiers, multi-step key sequence, mouse action (browser back/forward, real mouse buttons 4/5, middle/left/right click, scroll), launch application, shell command, macro, profile switch, disabled, or original passthrough
+- Hypershift layer: assign Hypershift key to a control, then give any other control a second action that applies only while you hold it. Controls without a Hypershift action keep their standard one. See [Hypershift layer](#hypershift-layer)
 - Held keyboard modifiers combine with the mouse's keys: Command plus a side button that sends C produces Command-C. This applies to remapped buttons, unmapped buttons and profiles saved to mouse memory, including keypad keys, key sequences and shortcuts. macOS does not apply modifiers held on one keyboard to keys from another device, so OpenNaga re-sends such mouse keys with the held modifiers while it is running with remapping enabled.
 - System editor with 25 actions for audio, playback, brightness, screenshots, windows, spaces and macOS tools, with a preview button
 - Existing text snippets remain saved and can be replaced through the Keys editor
@@ -50,6 +51,20 @@ Upgrading from 2.3.0 or earlier, including the builds named NagaController 2.x: 
 The Status section shows the current permission state, the detected device, and the last input seen. If a permission was granted after launch, macOS may require restarting the app.
 
 Button assignments are saved on the Mac and applied by OpenNaga while it runs in the menu bar. Closing the settings window is fine; quitting the app stops software remapping. To use a profile without the app, save it to the mouse.
+
+## Hypershift layer
+
+Hypershift doubles the number of actions without another profile, as in Razer Synapse. Each profile has a Standard layer and a Hypershift layer.
+
+1. In Buttons, keep the Standard layer selected, choose the control you want to hold (for example side button 12 or the middle click) and set its action to Hypershift key.
+2. Switch the layer selector above the button list to Hypershift. The list shows each control's Hypershift action, or its standard action when it has none.
+3. Select a control and assign its Hypershift action like any other action. Choose Same as standard to remove it.
+
+While the Hypershift key is held, controls with a Hypershift action perform it and every other control keeps its standard action. The key itself sends nothing. An output that starts while the key is held, such as a held keyboard key, still ends with the same key when you release the button, even if you let go of the Hypershift key first. You can assign Hypershift key to more than one control; the layer stays active while any of them is held.
+
+Use a control that reports when it is held: the side buttons, the middle click or the left and right clicks. Wheel tilt without driver mode arrives as scroll events with no hold, so it cannot act as a Hypershift key. A left or right click assigned to Hypershift key no longer clicks.
+
+The Hypershift layer is applied by OpenNaga while remapping is on. Mouse memory has no Hypershift layer: Save to Mouse reports a Hypershift key as an action that needs the app, and the layer cannot hold the hardware DPI up/down functions. Profiles written before this feature load unchanged; the layer is stored as an optional `hypershift` map next to `buttons` in `profiles.json` and in exported files.
 
 ## Save a profile to the mouse
 
