@@ -86,7 +86,7 @@ Updated the installed copy to 2.5.1 build 10 on 2026-10-13. Its development-sign
 
 ## Known issues / next steps
 
-- Issue #6 is closed. After 2.6.0 ships, reply to the reporter (same774): modifiers cannot combine with the mouse's own keys without the app, and onboard Hypershift is the no-software alternative they proposed. Show the text to the owner before posting.
+- Issue #6 is closed. On 2026-10-21 the reporter (same774) was told, with the owner's approval, that modifiers cannot combine with the mouse's own keys without the app and that 2.6.0 stores Hypershift in the mouse. Bluetooth feedback is pending.
 - Onboard Hypershift is unverified over Bluetooth. The physical test used side button 1 held with the thumb and wheel click/tilt; same-thumb side-button chords are impractical on this mouse, so keep examples and tests to feasible combinations.
 - Not notarized: users see a Gatekeeper warning. A Developer ID and notarization would remove it.
 - USB driver-mode toggle/restore, all 21 onboard descriptor readbacks, a physical Command+Shift shortcut and native wheel/tilt scaling passed on 2026-10-12. Remaining physical checks: per-button onboard execution, software remapping over Bluetooth, power-cycle persistence of the new build, simultaneous physical/synthetic modifier changes and USB unplug/replug.
