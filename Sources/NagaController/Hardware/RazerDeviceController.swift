@@ -85,8 +85,10 @@ final class RazerDeviceController {
                 case .importOnboard:
                     guard let functions = outcome.imported else { break }
                     let result = OnboardProfilePlan.mapping(from: functions)
-                    let name = ConfigManager.shared.createProfile(named: "From Mouse", mapping: result.mapping, onboardOnly: true)
-                    self.statusMessage = (["Imported supported assignments into profile \(name). Edit this profile and use Save to Mouse to apply changes. Software remapping is paused for imported profiles."] + result.issues).joined(separator: "\n")
+                    let shifted = OnboardProfilePlan.hypershiftMapping(standard: functions, hypershift: outcome.importedHypershift ?? [:])
+                    let name = ConfigManager.shared.createProfile(named: "From Mouse", mapping: result.mapping,
+                                                                  hypershift: shifted.mapping, onboardOnly: true)
+                    self.statusMessage = (["Imported supported assignments into profile \(name). Edit this profile and use Save to Mouse to apply changes. Software remapping is paused for imported profiles."] + result.issues + shifted.issues).joined(separator: "\n")
                 default: break
                 }
                 self.notify()
@@ -109,6 +111,7 @@ final class RazerDeviceController {
             let message: String
             let recoveryPending: Bool
             var imported: [UInt8: [UInt8]]? = nil
+            var importedHypershift: [UInt8: [UInt8]]? = nil
         }
         private let journalURL = DataFolder.file("driver-mode-recovery.json")
         private var modeChangedThisSession = false
@@ -131,6 +134,7 @@ final class RazerDeviceController {
                 let session = RazerHardwareSession(transport: transport)
                 var onboardMessage: String?
                 var imported: [UInt8: [UInt8]]?
+                var importedHypershift: [UInt8: [UInt8]]?
                 switch operation {
                 case .refresh: break
                 case .dpi(let x, let y): try session.setDPI(x: x, y: y)
@@ -145,7 +149,12 @@ final class RazerDeviceController {
                     try OnboardProfileStore.restore(session: session, identity: transport.identity)
                     onboardMessage = "Previous assignments restored. Software remapping is available."
                 case .importOnboard:
-                    imported = try RazerOnboardBindings.readFunctions(session: session, profile: 0)
+                    let standard = try RazerOnboardBindings.readFunctions(session: session, profile: 0)
+                    imported = standard
+                    // The Hypershift layer is reachable only through a Hypershift key.
+                    if standard.values.contains(OnboardProfilePlan.hypershiftFunction) {
+                        importedHypershift = try RazerOnboardBindings.readFunctions(session: session, profile: 0, layer: 1)
+                    }
                 case .mode(let enabled):
                     let current = try session.readMode()
                     let target: UInt8 = enabled ? 3 : 0
@@ -187,7 +196,7 @@ final class RazerDeviceController {
                         : "Hardware values read over USB."
                 return Outcome(connected: true, snapshot: snapshot,
                                message: ([onboardMessage ?? message] + snapshot.warnings).joined(separator: "\n"),
-                               recoveryPending: recoveryPending, imported: imported)
+                               recoveryPending: recoveryPending, imported: imported, importedHypershift: importedHypershift)
             } catch {
                 return Outcome(connected: connected, snapshot: nil, message: error.localizedDescription,
                                recoveryPending: FileManager.default.fileExists(atPath: journalURL.path))

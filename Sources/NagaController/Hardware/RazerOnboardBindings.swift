@@ -16,8 +16,8 @@ struct RazerOnboardBinding: Equatable, Codable {
         // bindings use length 1 but still carry a usage in byte 6 on this receiver.
         // Byte 2 selects the layer in requests (0 normal, 1 Hypershift). Replies do
         // not echo it: a Synapse-configured mouse reports 01 on some controls in
-        // both layers. Only the normal layer is read or written here, so store 0;
-        // keeping the reply value would send a restore to the Hypershift layer.
+        // both layers. Store 0 and pass the layer separately; keeping the reply
+        // value would send a restore to the wrong layer.
         var normalized = bytes
         normalized[2] = 0
         self.bytes = normalized
@@ -28,12 +28,19 @@ enum RazerOnboardBindings {
     static let getButtonIDs = RazerCommand(transaction: 0x1f, commandClass: 2, id: 0x84,
                                          arguments: Array(repeating: 0, count: 22))
 
-    static func readCommand(profile: UInt8, buttonID: UInt8) throws -> RazerCommand {
-        guard profile <= 1 else {
-            throw RazerHardwareError.invalidValue("Only the active and stored profiles are supported.")
+    static func readCommand(profile: UInt8, buttonID: UInt8, layer: UInt8 = 0) throws -> RazerCommand {
+        guard profile <= 1, layer <= 1 else {
+            throw RazerHardwareError.invalidValue("Only the active and stored profiles and two layers are supported.")
         }
         return RazerCommand(transaction: 0x1f, commandClass: 2, id: 0x8c,
-                            arguments: [profile, buttonID, 0, 0, 0, 0, 0, 0, 0, 0])
+                            arguments: [profile, buttonID, layer, 0, 0, 0, 0, 0, 0, 0])
+    }
+
+    static func writeCommand(_ binding: RazerOnboardBinding, layer: UInt8) throws -> RazerCommand {
+        guard layer <= 1 else { throw RazerHardwareError.invalidValue("Unknown assignment layer.") }
+        var arguments = binding.bytes
+        arguments[2] = layer
+        return RazerCommand(transaction: 0x1f, commandClass: 2, id: 0x0c, arguments: arguments)
     }
 
     static func decodeButtonIDs(_ bytes: [UInt8]) throws -> [UInt8] {
@@ -47,12 +54,12 @@ enum RazerOnboardBindings {
         return ids
     }
 
-    static func read(session: RazerHardwareSession, profile: UInt8) throws -> [RazerOnboardBinding] {
+    static func read(session: RazerHardwareSession, profile: UInt8, layer: UInt8 = 0) throws -> [RazerOnboardBinding] {
         // Validate the bank before any USB traffic.
-        _ = try readCommand(profile: profile, buttonID: 1)
+        _ = try readCommand(profile: profile, buttonID: 1, layer: layer)
         let ids = try decodeButtonIDs(session.execute(getButtonIDs))
         return try ids.map { id in
-            let bytes = try session.execute(readCommand(profile: profile, buttonID: id))
+            let bytes = try session.execute(readCommand(profile: profile, buttonID: id, layer: layer))
             return try RazerOnboardBinding(bytes: bytes, profile: profile, buttonID: id)
         }
     }
@@ -60,8 +67,8 @@ enum RazerOnboardBindings {
     // Read-only view for importing into a local profile: button ID to its seven
     // function bytes. Use the same identity validation and reply normalization
     // as backup and restore, retaining unknown function bytes unchanged.
-    static func readFunctions(session: RazerHardwareSession, profile: UInt8) throws -> [UInt8: [UInt8]] {
-        let bindings = try read(session: session, profile: profile)
+    static func readFunctions(session: RazerHardwareSession, profile: UInt8, layer: UInt8 = 0) throws -> [UInt8: [UInt8]] {
+        let bindings = try read(session: session, profile: profile, layer: layer)
         let expected = Set(OnboardProfilePlan.buttonIDs.values).union([UInt8(9), UInt8(10)])
         guard Set(bindings.map(\.buttonID)) == expected else {
             throw RazerHardwareError.malformed("Incomplete or unexpected mouse button layout.")

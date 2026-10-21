@@ -32,14 +32,31 @@ final class EventTapManager {
 
     private init() {}
 
+    private static var onboardActive: Bool {
+        OnboardProfileStore.isActive || ConfigManager.shared.currentProfileIsOnboardOnly
+    }
+
+    /// Mouse-memory and imported profiles never remap, and their Remapping
+    /// switch is unavailable, so native mouse keys always receive held keyboard
+    /// modifiers there. Otherwise both follow the Remapping switch.
+    static func policy(listenOnly: Bool, onboard: Bool) -> (remaps: Bool, mergesNativeModifiers: Bool) {
+        let remaps = !listenOnly && !onboard
+        return (remaps, remaps || onboard)
+    }
+
+    /// True when a running tap already matches the requested state.
+    func matches(listenOnly: Bool) -> Bool {
+        let policy = Self.policy(listenOnly: listenOnly, onboard: Self.onboardActive)
+        return isListeningOnly == !policy.remaps && mergesNativeModifiers == policy.mergesNativeModifiers
+    }
+
     func start(listenOnly: Bool) {
         stop()
         ButtonMapper.shared.resetPhysicalModifierObservation()
-        let onboard = OnboardProfileStore.isActive || ConfigManager.shared.currentProfileIsOnboardOnly
-        let mergeOnly = listenOnly && onboard && ConfigManager.shared.getRemappingEnabled()
-        let remapListenOnly = listenOnly || onboard
-        isListeningOnly = remapListenOnly
-        mergesNativeModifiers = !remapListenOnly || mergeOnly
+        let onboard = Self.onboardActive
+        let policy = Self.policy(listenOnly: listenOnly, onboard: onboard)
+        isListeningOnly = !policy.remaps
+        mergesNativeModifiers = policy.mergesNativeModifiers
         traceEnabled = ModifierTrace.isEnabled
         // Only a tap that may modify events is created as a blocking tap.
         let tapListenOnly = !mergesNativeModifiers

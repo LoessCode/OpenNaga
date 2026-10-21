@@ -14,8 +14,8 @@ OpenNaga is an independent project, not affiliated with or endorsed by Razer. It
 - Adaptive macOS settings window with a restrained green accent and three sections: Buttons, Sensitivity, Status
 - Interactive mouse photographs with side-button highlights, a top view and a matching assignment grid for all 19 logical controls
 - Actions per button: keyboard keys selected by category or recorded, with optional modifiers, multi-step key sequence, mouse action (browser back/forward, real mouse buttons 4/5, middle/left/right click, scroll), launch application, shell command, macro, profile switch, disabled, or original passthrough
-- Hypershift layer: assign Hypershift key to a control, then give any other control a second action that applies only while you hold it. Controls without a Hypershift action keep their standard one. See [Hypershift layer](#hypershift-layer)
-- Held keyboard modifiers combine with the mouse's keys: Command plus a side button that sends C produces Command-C. This applies to remapped buttons, unmapped buttons and profiles saved to mouse memory, including keypad keys, key sequences and shortcuts. macOS does not apply modifiers held on one keyboard to keys from another device, so OpenNaga re-sends such mouse keys with the held modifiers while it is running with remapping enabled.
+- Hypershift layer: assign Hypershift key to a control, then give any other control a second action that applies only while you hold it. Controls without a Hypershift action keep their standard one. Save to Mouse stores both layers, so Hypershift also works with the app closed. See [Hypershift layer](#hypershift-layer)
+- Held keyboard modifiers combine with the mouse's keys: Command plus a side button that sends C produces Command-C. This applies to remapped buttons, unmapped buttons and profiles saved to mouse memory, including keypad keys, key sequences and shortcuts. macOS does not apply modifiers held on one keyboard to keys from another device, so OpenNaga re-sends such mouse keys with the held modifiers while it is running. With a profile saved to or imported from the mouse this is always on; otherwise it follows the Remapping switch. Without the app, the mouse's keys arrive without keyboard modifiers.
 - System editor with 25 actions for audio, playback, brightness, screenshots, windows, spaces and macOS tools, with a preview button
 - Existing text snippets remain saved and can be replaced through the Keys editor
 - Save a profile to the mouse's onboard memory: it keeps working after you quit OpenNaga, on another computer and over Bluetooth
@@ -28,7 +28,7 @@ OpenNaga is an independent project, not affiliated with or endorsed by Razer. It
 - Settings appear in the Dock and Command-Tab while the window is open
 - Remapping activity prevents App Nap while allowing normal system sleep
 
-Release 2.5.1 corrects held keyboard modifiers, key release state and keypad identification. See the [release notes](Documentation/release-2.5.1.md) for changes and verified behavior. Scroll sensitivity and mouse-profile import were added in 2.5.0.
+Release 2.6.0 adds the Hypershift layer, stored in mouse memory as well, and applies held keyboard modifiers to the keys of a profile saved in the mouse. See the [release notes](Documentation/release-2.6.0.md) for changes and verified behavior.
 
 ## Requirements
 
@@ -38,7 +38,7 @@ Release 2.5.1 corrects held keyboard modifiers, key release state and keypad ide
 
 ## Install and first run
 
-1. Download `OpenNaga-v2.5.1.dmg` from the [latest release](https://github.com/Zer0codestuff/OpenNaga/releases/latest), or build the app bundle (see below).
+1. Download `OpenNaga-v2.6.0.dmg` from the [latest release](https://github.com/Zer0codestuff/OpenNaga/releases/latest), or build the app bundle (see below).
 2. Open the DMG and drag `OpenNaga.app` to Applications. Permissions are tied to the app location, so do not move it afterwards.
 3. The release is not notarized. On first launch right-click the app and choose Open, or run `xattr -dr com.apple.quarantine /Applications/OpenNaga.app`.
 4. Launch it. macOS prompts for two permissions; both are required:
@@ -62,9 +62,9 @@ Hypershift doubles the number of actions without another profile, as in Razer Sy
 
 While the Hypershift key is held, controls with a Hypershift action perform it and every other control keeps its standard action. The key itself sends nothing. An output that starts while the key is held, such as a held keyboard key, still ends with the same key when you release the button, even if you let go of the Hypershift key first. You can assign Hypershift key to more than one control; the layer stays active while any of them is held.
 
-Use a control that reports when it is held: the side buttons, the middle click or the left and right clicks. Wheel tilt without driver mode arrives as scroll events with no hold, so it cannot act as a Hypershift key. A left or right click assigned to Hypershift key no longer clicks.
+Use a control that reports when it is held and that you can hold while pressing the others, for example a side button under your thumb combined with wheel clicks and tilts. Wheel tilt without driver mode arrives as scroll events with no hold, so it cannot act as a Hypershift key in the app. A left or right click assigned to Hypershift key no longer clicks.
 
-The Hypershift layer is applied by OpenNaga while remapping is on. Mouse memory has no Hypershift layer: Save to Mouse reports a Hypershift key as an action that needs the app, and the layer cannot hold the hardware DPI up/down functions. Profiles written before this feature load unchanged; the layer is stored as an optional `hypershift` map next to `buttons` in `profiles.json` and in exported files.
+In the app, OpenNaga applies the layer while remapping is on. **Save to Mouse** writes both layers to the mouse, so the Hypershift key keeps working with the app closed, after a power cycle and on other computers. In mouse memory the Hypershift layer can also hold DPI up and down. The left click cannot be the Hypershift key there, so the mouse always keeps a working click. Profiles written before this feature load unchanged; the layer is stored as an optional `hypershift` map next to `buttons` in `profiles.json` and in exported files.
 
 ## Save a profile to the mouse
 
@@ -81,15 +81,16 @@ What the mouse can store:
 - A single key, with or without Command, Control, Shift and Option
 - Left, right and middle click, mouse buttons 4 and 5, scrolling and wheel tilt
 - DPI up and DPI down on the top buttons
+- A Hypershift key and the Hypershift layer, written with the same actions as above
 - Volume and media controls
 - System functions that map to a keyboard shortcut, such as screenshots
 - One-character text snippets that match a key in the current layout
 
 Key sequences, macros, shell commands, application launching, profile switching and Fn shortcuts need the app. If the profile contains one of them, OpenNaga lists the affected buttons and does not save. Key repeat and long presses follow the mouse firmware.
 
-Each save keeps a backup of the mouse's previous assignments and reads every button back to confirm the write. **Restore Previous Assignments** in the same window puts the backup back and re-enables software remapping. OpenNaga never writes to the mouse at startup, on refresh or at quit, only when you click Save or Restore.
+Each save keeps a backup of the mouse's previous assignments, including the Hypershift layer when a save changes it, and reads every button back to confirm the write. **Restore Previous Assignments** in the same window puts the backup back and re-enables software remapping. OpenNaga never writes to the mouse at startup, on refresh or at quit, only when you click Save or Restore.
 
-**Import from Mouse** in the Mouse Memory window reads the active assignments into a new **From Mouse** profile. Import performs no hardware writes. Supported keys, modifiers, mouse actions, DPI and media controls remain editable; unsupported assignments are listed. Imported profiles use **Save to Mouse** to apply edits. Their software remapping stays paused because custom firmware assignments can produce identical events from different physical controls. This restriction survives export, duplication and restart.
+**Import from Mouse** in the Mouse Memory window reads the active assignments into a new **From Mouse** profile. Import performs no hardware writes. Supported keys, modifiers, mouse actions, DPI, media controls and a Hypershift key with its layer remain editable; unsupported assignments are listed. Imported profiles use **Save to Mouse** to apply edits. Their software remapping stays paused because custom firmware assignments can produce identical events from different physical controls. This restriction survives export, duplication and restart.
 
 The scroll sensitivity sliders are in **Sensitivity**. Vertical wheel and horizontal scrolling, including wheel tilt and assigned scroll actions, have separate multipliers. **Reset** returns both to 1×. These settings stay on the Mac and require OpenNaga running with remapping enabled; they are not written to mouse memory. Trackpad and momentum scrolling are left unchanged.
 
@@ -124,10 +125,11 @@ Other ways to configure a Naga V2 HyperSpeed on a Mac:
 | 12 side buttons | Remapped | Remapped | Remapped |
 | Profile saved in the mouse | Yes | Not listed | Not listed |
 | DPI and polling rate | Yes, over the USB receiver | Not listed | Cursor speed in software |
+| Hypershift layer | Yes, also in mouse memory | Yes | Not listed |
 
 Razer Synapse for Mac does not support this mouse; owners are still asking for it on [Razer Insider](https://insider.razer.com/razer-synapse-for-mac-preview-61/naga-v2-hyperspeed-support-in-synapse-preview-78820). The usual workaround is to configure the mouse in Synapse on a Windows PC and carry the onboard profile over.
 
-[NagaController](https://github.com/DParent10/NagaController) is the project OpenNaga started from. It is still maintained and has Hypershift layers. [SteerMouse](https://plentycom.jp/en/steermouse/) works with mice from many brands and has per-application profiles. OpenNaga has neither.
+[NagaController](https://github.com/DParent10/NagaController) is the project OpenNaga started from and is still maintained. [SteerMouse](https://plentycom.jp/en/steermouse/) works with mice from many brands and has per-application profiles, which OpenNaga does not have.
 
 Details for the other apps come from their own pages and the [SteerMouse release notes](https://plentycom.jp/en/steermouse/download.php), checked in October 2026.
 
@@ -199,7 +201,7 @@ See [the latest verification record](Documentation/verification-2026-10-12.md) f
 - `HIDListener` observes vendor `1532` devices whose product ID is `00b4` or whose name contains "naga", plus the exact Bluetooth identity `068e:00b5`, on a background run loop. It does not enumerate other products under the Bluetooth vendor ID.
 - Each physical press/release is recorded with its timestamp. `EventTapManager` consumes a matching system event only if it arrives within 25 ms of a recorded HID edge, so regular keyboards are never blocked.
 - Synthetic events are tagged through `eventSourceUserData` and ignored by the tap.
-- macOS keeps modifier state per keyboard device, so keys from the mouse's keyboard interface never carry modifiers held on another keyboard. Every key usage from that interface is recorded, and when a matching key event lacks a held modifier, the tap drops it and re-sends the key through the synthetic source with the modifiers merged. Its auto-repeats and key-up follow the same path. The tap stays blocking for this while a mouse-memory profile pauses remapping; it never remaps keys there.
+- macOS keeps modifier state per keyboard device, so keys from the mouse's keyboard interface never carry modifiers held on another keyboard. Every key usage from that interface is recorded, and when a matching key event lacks a held modifier, the tap drops it and re-sends the key through the synthetic source with the modifiers merged. Its auto-repeats and key-up follow the same path. While a profile saved to or imported from the mouse is selected, the tap stays blocking for this alone and never remaps keys.
 - Held buttons are released on stop, disconnect, profile change, or when the tap is disabled by the system.
 - Buttons 13 to 16 (DPI, wheel tilt) rely on documented driver-mode reports and are only reported when a matching report is observed.
 

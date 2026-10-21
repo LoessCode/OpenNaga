@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                           PermissionManager.shared.hasAccessibilityPermission(),
                           PermissionManager.shared.hasInputMonitoringPermission() else { return }
                     let listenOnly = !ConfigManager.shared.getRemappingEnabled() || OnboardProfileStore.isActive
-                    if EventTapManager.shared.isListeningOnly != listenOnly {
+                    if !EventTapManager.shared.matches(listenOnly: listenOnly) {
                         EventTapManager.shared.start(listenOnly: listenOnly)
                     }
                     self.updateStatusItem()

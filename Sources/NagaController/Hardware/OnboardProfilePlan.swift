@@ -3,15 +3,24 @@ import Cocoa
 struct OnboardProfilePlan {
     let name: String
     var functions: [UInt8: [UInt8]] = [:]
+    // Hypershift layer entries. Written only when a standard control holds the
+    // Hypershift function; other controls then mirror their standard function.
+    var hypershiftFunctions: [UInt8: [UInt8]] = [:]
     var issues: [String] = []
     var isSupported: Bool { !functions.isEmpty && issues.isEmpty }
+    var hasHypershiftKey: Bool { functions.values.contains(Self.hypershiftFunction) }
+
+    // Hold-to-shift. Verified on 1532:00b4 on 2026-10-21: while held, the other
+    // controls use their Hypershift layer entries. The 0c 01 02 variant stayed
+    // latched after release, so it is never written.
+    static let hypershiftFunction: [UInt8] = [0x0c, 1, 1, 0, 0, 0, 0]
 
     // Grid IDs increase with the printed button numbers, not enumeration order.
     static let buttonIDs: [Int: UInt8] = Dictionary(uniqueKeysWithValues:
         (1...12).map { ($0, UInt8(0x40 + $0 - 1)) } +
         [(13, 0x0b), (14, 0x0c), (15, 0x34), (16, 0x35), (17, 3), (18, 1), (19, 2)])
 
-    init(name: String, mapping: [Int: ActionType]) {
+    init(name: String, mapping: [Int: ActionType], hypershift: [Int: ActionType] = [:]) {
         self.name = name
         for index in mapping.keys.sorted() {
             guard let id = Self.buttonIDs[index], let action = mapping[index] else {
@@ -21,6 +30,23 @@ struct OnboardProfilePlan {
             catch { issues.append("Button \(index): \(error.localizedDescription)") }
         }
         if mapping.isEmpty { issues.append("The profile is empty.") }
+        if case .hypershift? = mapping[18] {
+            issues.append("Button 18: left click cannot be the Hypershift key in mouse memory.")
+        }
+        guard hasHypershiftKey else { return }
+        for (id, function) in functions where function == Self.hypershiftFunction {
+            hypershiftFunctions[id] = function
+        }
+        for index in hypershift.keys.sorted() {
+            guard let id = Self.buttonIDs[index], let action = hypershift[index] else {
+                issues.append("Hypershift button \(index): unknown hardware control."); continue
+            }
+            if case .hypershift = action { continue }
+            // A Hypershift key keeps its function in both layers.
+            guard hypershiftFunctions[id] == nil else { continue }
+            do { hypershiftFunctions[id] = try Self.function(action) }
+            catch { issues.append("Hypershift button \(index): \(error.localizedDescription)") }
+        }
     }
 
     private static func unsupported(_ text: String) -> RazerHardwareError { .invalidValue(text) }
@@ -55,7 +81,8 @@ struct OnboardProfilePlan {
             }
         case .audio(let action, _): return try system(SystemAction(audio: action))
         case .system(let action, _): return try system(action)
-        case .application, .systemCommand, .macro, .profileSwitch, .hypershift:
+        case .hypershift: return hypershiftFunction
+        case .application, .systemCommand, .macro, .profileSwitch:
             throw unsupported("this action needs OpenNaga running.")
         }
     }
@@ -86,6 +113,23 @@ struct OnboardProfilePlan {
         return (mapping, issues)
     }
 
+    /// Hypershift layer entries that differ from the standard layer. Entries
+    /// equal to the standard function read as "Same as standard".
+    static func hypershiftMapping(standard: [UInt8: [UInt8]], hypershift: [UInt8: [UInt8]]) -> (mapping: [Int: ActionType], issues: [String]) {
+        guard standard.values.contains(hypershiftFunction) else { return ([:], []) }
+        var mapping: [Int: ActionType] = [:]
+        var issues: [String] = []
+        for (index, id) in buttonIDs.sorted(by: { $0.key < $1.key }) {
+            guard let function = hypershift[id], function != standard[id], standard[id] != hypershiftFunction else { continue }
+            if let action = action(from: function), action != .hypershift(description: nil) {
+                mapping[index] = action
+            } else {
+                issues.append("Hypershift button \(index): unsupported assignment \(function.map { String(format: "%02x", $0) }.joined(separator: " ")).")
+            }
+        }
+        return (mapping, issues)
+    }
+
     static func action(from function: [UInt8]) -> ActionType? {
         guard function.count == 7 else { return nil }
         if function.allSatisfy({ $0 == 0 }) { return .disabled }
@@ -101,6 +145,8 @@ struct OnboardProfilePlan {
         case (0x0e, 3):
             let tilt: [UInt8: MouseAction] = [0x68: .scrollLeft, 0x69: .scrollRight]
             action = tilt[function[2]].map { .mouse(action: $0, description: nil) }
+        case (0x0c, 1):
+            action = function[2] == 1 ? .hypershift(description: nil) : nil
         case (0x0a, 2):
             action = media.first { $0.value == function[3] }.map { .system(action: $0.key, description: nil) }
         case (2, 1), (2, 2):

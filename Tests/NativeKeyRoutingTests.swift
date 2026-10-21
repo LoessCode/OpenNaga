@@ -125,6 +125,14 @@ enum NativeKeyRoutingTests {
 
         try check(ModifierTrace.hex(command) == "0x100000", "Trace formats flags in hexadecimal")
         try check(ModifierTrace.defaultsKey == "ModifierTrace" && ModifierTrace.fileName == "modifier-trace.log", "Trace switch and file name are stable")
+        // Tap policy. Mouse-memory and imported profiles merge held modifiers
+        // even though their Remapping switch is unavailable.
+        let policy = EventTapManager.policy
+        try check(policy(false, false) == (true, true), "Remapping on: remap and merge native keys")
+        try check(policy(true, false) == (false, false), "Remapping off: pass every event untouched")
+        try check(policy(false, true) == (false, true), "Saved mouse profile at launch: merge without remapping")
+        try check(policy(true, true) == (false, true), "Imported profile: merge without remapping")
+
         return count
     }
 }

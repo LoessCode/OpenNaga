@@ -5,6 +5,10 @@ enum OnboardProfileTests {
     final class Mouse: RazerTransport {
         var identity = "fixture"
         var bindings: [UInt8: [UInt8]] = [:]
+        var hyper: [UInt8: [UInt8]] = [:] // Hypershift layer, stored with byte 2 = 0.
+        var hyperReads = 0
+        var shiftFlag: Set<UInt8> = [] // Last write to the control addressed the Hypershift layer.
+        var failNextHyperSet = false
         var sets: [[UInt8]] = []
         var failNextSet = false
         var failAllSets = false
@@ -15,6 +19,11 @@ enum OnboardProfileTests {
                 bindings[id] = [1, id, 0, 1, 1, id, 0, 0, 0, 0]
             }
             for id in UInt8(64)...75 { bindings[id] = [1,id,0,2,1,0,0x1e + id - 64,0,0,0] }
+            hyper = bindings
+            // A distinct Hypershift layer, like the factory DPI functions on 0x0b/0x0c.
+            hyper[0x0b] = [1,0x0b,0,6,1,1,0,0,0,0]
+            hyper[0x0c] = [1,0x0c,0,6,1,2,0,0,0,0]
+            for id in UInt8(64)...75 { hyper[id] = [1,id,0,2,1,0,0x04 + id - 64,0,0,0] }
         }
         func open() throws {}
         func close() {}
@@ -26,15 +35,21 @@ enum OnboardProfileTests {
             case (0, 0x84): args = [0, 0]
             case (2, 0x84): args = [21] + ids
             case (2, 0x8c):
-                guard var value = bindings[args[1]] else { throw Failure(description: "Unknown control") }
+                if args[2] == 1 { hyperReads += 1 }
+                guard var value = (args[2] == 1 ? hyper : bindings)[args[1]] else { throw Failure(description: "Unknown control") }
                 value[0] = args[0]
-                if flagged.contains(args[1]) { value[2] = 1 }
+                if flagged.contains(args[1]) || shiftFlag.contains(args[1]) { value[2] = 1 }
                 args = value
             case (2, 0x0c):
                 sets.append(args)
-                bindings[args[1]] = args // A lost ACK may still follow a successful write.
-                if failNextSet || failAllSets {
+                var stored = args
+                stored[2] = 0
+                // A lost ACK may still follow a successful write.
+                if args[2] == 1 { hyper[args[1]] = stored } else { bindings[args[1]] = stored }
+                if args[2] == 1 { shiftFlag.insert(args[1]) } else { shiftFlag.remove(args[1]) }
+                if failNextSet || failAllSets || (args[2] == 1 && failNextHyperSet) {
                     failNextSet = false
+                    if args[2] == 1 { failNextHyperSet = false }
                     throw Failure(description: "Lost write ACK")
                 }
             default: throw Failure(description: "Unexpected command")
@@ -122,6 +137,87 @@ enum OnboardProfileTests {
         try rejects { try OnboardProfileStore.save(escape, session: session, identity: mouse.identity, at: url) }
         try OnboardProfileStore.restore(session: session, identity: mouse.identity, at: url)
         try check(mouse.bindings == original, "Manual recovery after interrupted writes")
+
+        // Hypershift in mouse memory (#6).
+        mouse.bindings = original
+        let originalHyper = mouse.hyper
+        func sortedLayer(_ layer: [UInt8: [UInt8]]) -> [[UInt8]] { mouse.ids.compactMap { layer[$0] } }
+        mouse.sets = []
+        mouse.hyperReads = 0
+        try OnboardProfileStore.save(escape, session: session, identity: mouse.identity, at: url)
+        try check(mouse.hyperReads == 0 && mouse.sets.allSatisfy { $0[2] == 0 }, "A profile without Hypershift never reads or writes that layer")
+        try check(OnboardProfileStore.load(from: url).originalHypershift == nil, "No Hypershift backup without Hypershift")
+        let commandC = KeyStroke(key: "c", modifiers: ["cmd"], keyCode: 8)
+        let escapeStroke = KeyStroke(key: "escape", modifiers: [], keyCode: 53)
+        let shifted = OnboardProfilePlan(name: "Shift",
+                                         mapping: [12: .hypershift(description: nil), 1: .keySequence(keys: [escapeStroke], description: nil)],
+                                         hypershift: [1: .keySequence(keys: [commandC], description: nil), 2: .mouse(action: .button5, description: nil),
+                                                      12: .keySequence(keys: [commandC], description: nil)])
+        try check(shifted.isSupported && shifted.hasHypershiftKey, "Hypershift profile can be saved to the mouse")
+        try check(shifted.functions[0x4b] == [0x0c,1,1,0,0,0,0], "Hypershift key uses the hold function")
+        try check(shifted.hypershiftFunctions[0x4b] == [0x0c,1,1,0,0,0,0], "Hypershift key keeps its function in the Hypershift layer")
+        try check(shifted.hypershiftFunctions[0x40] == [2,2,8,6,0,0,0], "Hypershift layer key with modifier")
+        mouse.sets = []
+        try OnboardProfileStore.save(shifted, session: session, identity: mouse.identity, at: url)
+        try check(mouse.bindings[0x4b] == [1,0x4b,0,0x0c,1,1,0,0,0,0] && mouse.bindings[0x40] == [1,0x40,0,2,2,0,41,0,0,0], "Standard layer stores the Hypershift key")
+        try check(mouse.hyper[0x40] == [1,0x40,0,2,2,8,6,0,0,0] && mouse.hyper[0x41] == [1,0x41,0,1,1,5,0,0,0,0], "Hypershift layer stores its own actions")
+        try check(mouse.hyper[0x42] == mouse.bindings[0x42] && mouse.hyper[0x0b] == mouse.bindings[0x0b] && mouse.hyper[1] == mouse.bindings[1],
+                  "Controls without a Hypershift action keep their standard function")
+        try check(mouse.sets.contains { $0[2] == 1 } && mouse.sets.contains { $0[2] == 0 }, "Writes address both layers explicitly")
+        try check(mouse.shiftFlag.isEmpty, "Normal-layer writes follow Hypershift writes, clearing the reply flag")
+        if let firstNormal = mouse.sets.firstIndex(where: { $0[2] == 0 }) {
+            try check(!mouse.sets[firstNormal...].contains { $0[2] == 1 }, "Hypershift layer is written before the normal layer")
+        }
+        let shiftedState = try OnboardProfileStore.load(from: url)
+        try check(shiftedState.originalHypershift == sortedLayer(originalHyper) && shiftedState.original == state.original,
+                  "Journal keeps both original layers")
+        let setsAfterShift = mouse.sets.count
+        try OnboardProfileStore.save(shifted, session: session, identity: mouse.identity, at: url)
+        try check(mouse.sets.count == setsAfterShift, "Identical Hypershift save avoids flash writes")
+        try OnboardProfileStore.save(escape, session: session, identity: mouse.identity, at: url)
+        try check(mouse.hyper == originalHyper && mouse.bindings[0x4b] == original[0x4b], "A profile without Hypershift returns that layer to the original")
+        try check(mouse.shiftFlag.isEmpty, "Returning the Hypershift layer also clears the reply flag")
+        try check(OnboardProfileStore.load(from: url).originalHypershift == sortedLayer(originalHyper), "Hypershift backup survives profile replacement")
+        try OnboardProfileStore.save(shifted, session: session, identity: mouse.identity, at: url)
+        let priorShiftData = try Data(contentsOf: url), priorShiftBindings = mouse.bindings, priorShiftHyper = mouse.hyper
+        let changedShift = OnboardProfilePlan(name: "Changed", mapping: [12: .hypershift(description: nil)],
+                                              hypershift: [3: .keySequence(keys: [commandC], description: nil)])
+        mouse.failNextHyperSet = true
+        try rejects { try OnboardProfileStore.save(changedShift, session: session, identity: mouse.identity, at: url) }
+        try check(mouse.bindings == priorShiftBindings && mouse.hyper == priorShiftHyper, "Failed Hypershift write rolls back both layers")
+        try check(Data(contentsOf: url) == priorShiftData, "Hypershift rollback preserves the journal")
+        try OnboardProfileStore.restore(session: session, identity: mouse.identity, at: url)
+        try check(mouse.bindings == original && mouse.hyper == originalHyper, "Restore recovers both layers")
+        try check(mouse.shiftFlag.isEmpty, "Restore leaves no Hypershift reply flag")
+        try check(!FileManager.default.fileExists(atPath: url.path), "Restore removes the journal")
+        // Journals written before 2.6.0 have no Hypershift backup.
+        let legacy = #"{"identity":"fixture","original":\#(sortedLayer(original).map { $0.map(Int.init) }),"name":"Old","pending":false}"#
+        try Data(legacy.utf8).write(to: url)
+        try check(OnboardProfileStore.load(from: url).originalHypershift == nil, "Older journals still load")
+        try OnboardProfileStore.save(shifted, session: session, identity: mouse.identity, at: url)
+        try check(OnboardProfileStore.load(from: url).originalHypershift == sortedLayer(originalHyper), "Older journal gains the untouched Hypershift layer as its backup")
+        try OnboardProfileStore.restore(session: session, identity: mouse.identity, at: url)
+        try check(mouse.bindings == original && mouse.hyper == originalHyper, "Older journal restores both layers")
+        // Plan validation.
+        let leftShift = OnboardProfilePlan(name: "Left", mapping: [18: .hypershift(description: nil)])
+        try check(!leftShift.isSupported && leftShift.issues.contains { $0.contains("left click") }, "Left click cannot be the Hypershift key in mouse memory")
+        let unreachable = OnboardProfilePlan(name: "Unreachable", mapping: [1: .disabled], hypershift: [2: .macro(steps: [], description: nil)])
+        try check(unreachable.isSupported && unreachable.hypershiftFunctions.isEmpty, "Hypershift actions are ignored without a Hypershift key")
+        let appOnly = OnboardProfilePlan(name: "App", mapping: [12: .hypershift(description: nil)], hypershift: [2: .macro(steps: [], description: nil)])
+        try check(!appOnly.isSupported && appOnly.issues.contains { $0.hasPrefix("Hypershift button 2:") }, "App-only Hypershift actions are named")
+        try check(OnboardProfilePlan.action(from: [0x0c,1,1,0,0,0,0]) == .hypershift(description: nil), "Hold Hypershift imports")
+        try check(OnboardProfilePlan.action(from: [0x0c,1,2,0,0,0,0]) == nil, "Latching Hypershift variant is reported, not imported")
+        let importedShift = OnboardProfilePlan.hypershiftMapping(
+            standard: [0x4b: [0x0c,1,1,0,0,0,0], 0x40: [2,2,0,41,0,0,0], 0x41: [2,2,0,6,0,0,0]],
+            hypershift: [0x4b: [0x0c,1,1,0,0,0,0], 0x40: [2,2,8,6,0,0,0], 0x41: [2,2,0,6,0,0,0]])
+        try check(importedShift.mapping == [1: .keySequence(keys: [OnboardProfilePlan.action(from: [2,2,8,6,0,0,0])!].compactMap { action -> KeyStroke? in
+            if case .keySequence(let keys, _) = action { return keys.first }; return nil }, description: nil)] && importedShift.issues.isEmpty,
+                  "Import keeps only Hypershift entries that differ from the standard layer")
+        try check(OnboardProfilePlan.hypershiftMapping(standard: [0x40: [2,2,0,41,0,0,0]], hypershift: [0x40: [2,2,8,6,0,0,0]]).mapping.isEmpty,
+                  "Without a Hypershift key the layer is not imported")
+        mouse.bindings = original
+        mouse.hyper = originalHyper
+        mouse.sets = []
 
         // Import: every function the encoder writes decodes back to the same bytes.
         for function: [UInt8] in [[1,1,1,0,0,0,0], [1,1,4,0,0,0,0], [1,1,10,0,0,0,0], [6,1,2,0,0,0,0], [14,3,104,0,20,0,0],

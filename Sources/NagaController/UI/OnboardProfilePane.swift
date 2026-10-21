@@ -4,7 +4,7 @@ struct OnboardProfilePane: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var model = WorkspaceModel.shared
     private var device: RazerDeviceController { .shared }
-    private var plan: OnboardProfilePlan { .init(name: model.profile, mapping: model.mapping) }
+    private var plan: OnboardProfilePlan { .init(name: model.profile, mapping: model.mapping, hypershift: model.hypershiftMapping) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -15,7 +15,7 @@ struct OnboardProfilePane: View {
             if model.onboardActive {
                 LabeledContent("In the mouse", value: model.onboardName ?? "Restore needed")
             }
-            Text("The mouse itself runs keys, shortcuts, media controls and clicks. Buttons 4 and 5 stay standard mouse buttons. Editor changes and profile switches need a new save.")
+            Text("The mouse itself runs keys, shortcuts, media controls, clicks and the Hypershift layer. Buttons 4 and 5 stay standard mouse buttons. Editor changes and profile switches need a new save.")
                 .font(.callout).foregroundStyle(.secondary)
             if !plan.issues.isEmpty {
                 ScrollView {

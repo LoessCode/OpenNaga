@@ -27,7 +27,8 @@ enum NagaDiagnostics {
             guard !(saveOnboard && restoreOnboard) else { throw RazerHardwareError.invalidValue("Choose either save or restore.") }
             if saveOnboard {
                 ConfigManager.shared.load()
-                let plan = OnboardProfilePlan(name: ConfigManager.shared.currentProfileName, mapping: ConfigManager.shared.mappingForCurrentProfile())
+                let plan = OnboardProfilePlan(name: ConfigManager.shared.currentProfileName, mapping: ConfigManager.shared.mappingForCurrentProfile(),
+                                              hypershift: ConfigManager.shared.mappingForCurrentProfile(layer: .hypershift))
                 report["profile"] = plan.name
                 report["planIssues"] = plan.issues
                 try OnboardProfileStore.save(plan, session: session, identity: transport.identity)

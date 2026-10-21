@@ -176,11 +176,15 @@ final class ConfigManager {
     // Creates and selects a profile from a complete mapping, e.g. one read from the mouse.
     // Returns the name used, adding a number when the name is taken.
     @discardableResult
-    func createProfile(named base: String, mapping: [Int: ActionType], onboardOnly: Bool = false) -> String {
+    func createProfile(named base: String, mapping: [Int: ActionType], hypershift: [Int: ActionType] = [:], onboardOnly: Bool = false) -> String {
         var name = base
         var suffix = 2
         while profiles[name] != nil { name = "\(base) \(suffix)"; suffix += 1 }
-        profiles[name] = Profile(buttons: Dictionary(uniqueKeysWithValues: mapping.map { (String($0.key), toButtonAction($0.value)) }), onboardOnly: onboardOnly ? true : nil)
+        func stored(_ layer: [Int: ActionType]) -> [String: ButtonAction] {
+            Dictionary(uniqueKeysWithValues: layer.map { (String($0.key), toButtonAction($0.value)) })
+        }
+        profiles[name] = Profile(buttons: stored(mapping), onboardOnly: onboardOnly ? true : nil,
+                                 hypershift: hypershift.isEmpty ? nil : stored(hypershift))
         setCurrentProfile(name)
         return name
     }

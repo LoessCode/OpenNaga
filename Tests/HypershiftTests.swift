@@ -121,7 +121,7 @@ enum HypershiftTests {
         try check(loaded.profiles["Copy"]?.hypershift == nil, "An empty Hypershift layer is removed from the profile file")
         let legacy = Data("{\"buttons\":{}}".utf8)
         try check(JSONDecoder().decode(Profile.self, from: legacy).hypershift == nil, "Profiles written before the Hypershift layer need no migration")
-        try check(!OnboardProfilePlan(name: "Layers", mapping: [12: .hypershift(description: nil)]).isSupported, "Mouse memory refuses a Hypershift key, which needs the app")
+        try check(OnboardProfilePlan(name: "Layers", mapping: [12: .hypershift(description: nil)]).isSupported, "Mouse memory stores a Hypershift key")
         ButtonMapper.shared.updateMapping([:])
     }
 }

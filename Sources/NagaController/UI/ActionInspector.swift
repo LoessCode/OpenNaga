@@ -118,7 +118,7 @@ struct ActionInspector: View {
             }
         case .hypershift:
             Label("Hypershift key", systemImage: "shift")
-            Text("While you hold this control, the other controls use their Hypershift layer actions. Controls without one keep their standard action. Use a control you can hold, such as a side button or the middle click.")
+            Text("While you hold this control, the other controls use their Hypershift layer actions. Controls without one keep their standard action. Pick a control you can hold while pressing the others, for example a side button held with your thumb while you click or tilt the wheel. Save to Mouse stores both layers, so Hypershift also works with the app closed.")
                 .foregroundStyle(.secondary)
             Button("Edit Hypershift Layer") { model.layer = .hypershift }
         case .disabled:
@@ -132,8 +132,7 @@ struct ActionInspector: View {
             }
             Text("Recommended for browser navigation.").font(.caption).foregroundStyle(.secondary)
             Picker("Function", selection: Binding(get: { mouse }, set: { mouse = $0; persist() })) {
-                // DPI functions exist only in mouse memory, which has no Hypershift layer.
-                ForEach(MouseAction.allCases.filter { !shiftedLayer || ($0 != .dpiUp && $0 != .dpiDown) }, id: \.rawValue) { Text($0.title).tag($0) }
+                ForEach(MouseAction.allCases, id: \.rawValue) { Text($0.title).tag($0) }
             }
             Text(mouse == .dpiUp || mouse == .dpiDown
                  ? "Hardware function: choose Save to Mouse to apply it. It changes the DPI stage inside the mouse, even when the app is closed."
