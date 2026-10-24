@@ -89,6 +89,11 @@ struct InputRepeatOwnership {
 
 /// Both timestamps use monotonic seconds since boot. A matching edge is removed,
 /// even when the caller elects to leave an unmapped input untouched.
+///
+/// An edge matches an event whose timestamp is within `window` of it. Both are
+/// hardware timestamps, not the time a callback ran, so a callback that runs
+/// late still matches. The edge must therefore outlive that delay: it is kept
+/// for `retention`, measured from the newest timestamp seen, not for `window`.
 struct InputEdgeMatcher {
     struct Edge {
         let button: Int
@@ -96,16 +101,17 @@ struct InputEdgeMatcher {
         let timestamp: TimeInterval
     }
     var window: TimeInterval = 0.025
+    var retention: TimeInterval = 1
     private var edges: [Edge] = []
 
     mutating func record(button: Int, down: Bool, timestamp: TimeInterval) {
-        edges.removeAll { timestamp - $0.timestamp > window }
+        edges.removeAll { timestamp - $0.timestamp > retention }
         edges.append(Edge(button: button, down: down, timestamp: timestamp))
         if edges.count > 128 { edges.removeFirst(edges.count - 128) }
     }
 
     mutating func consume(button: Int, down: Bool, timestamp: TimeInterval) -> Bool {
-        edges.removeAll { timestamp - $0.timestamp > window }
+        edges.removeAll { timestamp - $0.timestamp > retention }
         guard let index = edges.firstIndex(where: {
             $0.button == button && $0.down == down && abs(timestamp - $0.timestamp) <= window
         }) else { return false }
@@ -114,4 +120,37 @@ struct InputEdgeMatcher {
     }
 
     mutating func reset() { edges.removeAll() }
+}
+
+/// Edges recorded on the HID thread and consumed by the event tap. The two
+/// run on different threads with no guaranteed order, so a consumer can ask
+/// for an edge the HID thread has not recorded yet and wait briefly for it.
+final class CorrelatedEdges {
+    private let condition = NSCondition()
+    private var matcher = InputEdgeMatcher()
+
+    func record(button: Int, down: Bool, timestamp: TimeInterval) {
+        condition.lock()
+        matcher.record(button: button, down: down, timestamp: timestamp)
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    /// - Parameter waitUpTo: how long to wait for a matching edge that has not
+    ///   arrived. Zero returns at once.
+    func consume(button: Int, down: Bool, timestamp: TimeInterval, waitUpTo: TimeInterval = 0) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date(timeIntervalSinceNow: waitUpTo)
+        repeat {
+            if matcher.consume(button: button, down: down, timestamp: timestamp) { return true }
+        } while waitUpTo > 0 && condition.wait(until: deadline)
+        return false
+    }
+
+    func reset() {
+        condition.lock()
+        matcher.reset()
+        condition.unlock()
+    }
 }

@@ -15,10 +15,10 @@ final class HIDListener {
     private(set) var transport: String?
     private(set) var lastInputDescription = "No input detected. The DPI buttons require a recognized driver report."
     private let lock = NSLock()
-    private var matcher = InputEdgeMatcher()
+    private let matcher = CorrelatedEdges()
     // Every key from the mouse's keyboard interface, keyed by HID usage, so
     // native keys can receive modifiers held on another keyboard.
-    private var nativeKeyMatcher = InputEdgeMatcher()
+    private let nativeKeyMatcher = CorrelatedEdges()
     private var nativeKeysHeld: Set<UInt32> = []
     private var scrollMatcher = ScrollInputMatcher()
     private var runLoop: CFRunLoop?
@@ -82,6 +82,10 @@ final class HIDListener {
             }
         }
         worker.name = "Naga HID input"
+        // A game can keep every core busy. This thread must record a press at
+        // least as promptly as the event tap handles it, so it runs at the same
+        // priority as the main thread's remapping activity.
+        worker.qualityOfService = .userInteractive
         thread = worker
         worker.start()
     }
@@ -102,13 +106,13 @@ final class HIDListener {
     }
 
     func resetCorrelation() {
-        lock.lock(); matcher.reset(); scrollMatcher.reset(); nativeKeyMatcher.reset(); lock.unlock()
+        lock.lock(); scrollMatcher.reset(); lock.unlock()
+        matcher.reset(); nativeKeyMatcher.reset()
     }
 
     /// Consumes a mouse key edge for any HID usage that produces `keyCode`.
     func consumeNativeKey(keyCode: CGKeyCode, down: Bool, timestamp: TimeInterval) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        return HIDKeyboardUsage.usages(forKeyCode: keyCode).contains {
+        HIDKeyboardUsage.usages(forKeyCode: keyCode).contains {
             nativeKeyMatcher.consume(button: Int($0), down: down, timestamp: timestamp)
         }
     }
@@ -118,9 +122,10 @@ final class HIDListener {
         return HIDKeyboardUsage.usages(forKeyCode: keyCode).contains { nativeKeysHeld.contains($0) }
     }
 
-    func consume(buttonIndex: Int, down: Bool, timestamp: TimeInterval) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        return matcher.consume(button: buttonIndex, down: down, timestamp: timestamp)
+    /// - Parameter waitUpTo: how long to wait for the mouse's HID edge when the
+    ///   system event arrives first. The wait ends the moment the edge is recorded.
+    func consume(buttonIndex: Int, down: Bool, timestamp: TimeInterval, waitUpTo: TimeInterval = 0) -> Bool {
+        matcher.consume(button: buttonIndex, down: down, timestamp: timestamp, waitUpTo: waitUpTo)
     }
 
     func consumeScroll(vertical: Bool, horizontal: Bool, shifted: Bool, timestamp: TimeInterval) -> ScrollInputMatcher.Match {
@@ -177,9 +182,9 @@ final class HIDListener {
             if valueStates[nativeKey, default: false] != down {
                 valueStates[nativeKey] = down
                 lock.lock()
-                nativeKeyMatcher.record(button: Int(usage), down: down, timestamp: timestamp)
                 if down { nativeKeysHeld.insert(usage) } else { nativeKeysHeld.remove(usage) }
                 lock.unlock()
+                nativeKeyMatcher.record(button: Int(usage), down: down, timestamp: timestamp)
             }
         }
         let rawTilt = usesRawTiltDecoding &&
@@ -194,9 +199,10 @@ final class HIDListener {
             valueStates[key] = down
         }
         lock.lock()
-        matcher.record(button: button, down: down, timestamp: timestamp)
         if !pan { if down { heldButtons.insert(button) } else { heldButtons.remove(button) } }
         lock.unlock()
+        // Last, so a consumer woken by this edge already sees the held state.
+        matcher.record(button: button, down: down, timestamp: timestamp)
         publishInput {
             self.lastInputDescription = "Button \(button): \(down ? "pressed" : "released")"
             if down { NotificationCenter.default.post(name: Notification.Name("NagaButtonActivity"), object: self, userInfo: ["buttonIndex": button]) }
@@ -211,9 +217,9 @@ final class HIDListener {
         lock.lock()
         let changed = driverModeEnabled != enabled
         driverModeEnabled = enabled
-        if changed { rawState.reset(); matcher.reset(); scrollMatcher.reset() }
+        if changed { rawState.reset(); scrollMatcher.reset() }
         lock.unlock()
-        if changed { EventTapManager.shared.resetInputState() }
+        if changed { matcher.reset(); EventTapManager.shared.resetInputState() }
     }
 
     func isPhysicallyHeld(_ button: Int) -> Bool {
